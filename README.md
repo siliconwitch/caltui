@@ -55,7 +55,28 @@ _Looking for maintainers._
 
 ## Usage
 
-Run `caltui` in a terminal. (TODO add more basic usage info). Press `Ctrl-h` for the full list of keybindings.
+Run `caltui` in a terminal. It opens on a month view, with week and day views
+a keypress away (`m`/`w`/`d`), and vim-style keys for moving around and
+managing events. A context-sensitive hint bar at the bottom of the screen
+shows the keys available at any moment. Note: while the UI is being finalised,
+caltui currently ships with sample events rather than your real calendars.
+
+### Keybindings
+
+| Key                 | Action                        |
+| ------------------- | ----------------------------- |
+| `m` `w` `d`         | Month / week / day view       |
+| `hjkl` / arrows     | Move around                   |
+| `tab` / `shift-tab` | Select next / previous event  |
+| `n`                 | New event                     |
+| `e`                 | Edit selected event           |
+| `d`                 | Delete selected event         |
+| `y`                 | Yank (copy) selected event    |
+| `p`                 | Paste event                   |
+| `t`                 | Jump to today                 |
+| `g`                 | Go to date                    |
+| `esc`               | Deselect / close popup        |
+| `q`                 | Quit                          |
 
 ## Config
 
@@ -64,8 +85,20 @@ or an explicit `$CALTUI_CONFIG` path). Every key is optional and falls back
 to the default below.
 
 ```toml
-[help]
-enabled = true
+[calendar]
+# IANA name, e.g. "Europe/Stockholm". Defaults to the system timezone.
+timezone = ""
+
+[monthview]
+show_week_numbers = false
+
+[weekview]
+day_start = "00:00"
+day_end = "24:00"
+
+[dayview]
+day_start = "00:00"
+day_end = "24:00"
 ```
 
 ## Contributing

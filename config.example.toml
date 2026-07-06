@@ -1,0 +1,19 @@
+[calendar]
+# IANA timezone name, e.g. "Europe/Stockholm". Defaults to the system timezone.
+timezone = ""
+
+[monthview]
+# Show ISO week numbers in a gutter on the left of the month grid.
+show_week_numbers = false
+
+[weekview]
+# Start of the window the week grid scrolls to when it opens, as HH:MM.
+day_start = "00:00"
+# End of that window, as HH:MM. Scrolling still reaches 00:00-24:00.
+day_end = "24:00"
+
+[dayview]
+# Start of the window the day view scrolls to when it opens, as HH:MM.
+day_start = "00:00"
+# End of that window, as HH:MM. Scrolling still reaches 00:00-24:00.
+day_end = "24:00"
