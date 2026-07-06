@@ -4,7 +4,186 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/siliconwitch/caltui/calendar"
 )
+
+type fakeSource struct {
+	events []calendar.Event
+}
+
+func (f fakeSource) Events(from, to time.Time) []calendar.Event {
+	var events []calendar.Event
+	for _, event := range f.events {
+		if event.End.After(from) && event.Start.Before(to) {
+			events = append(events, event)
+		}
+	}
+
+	return events
+}
+
+func (f fakeSource) Calendars() []calendar.Calendar {
+	return nil
+}
+
+func TestWeekLayout(t *testing.T) {
+	week := time.Date(2026, time.July, 6, 0, 0, 0, 0, time.UTC)
+
+	day := func(offset int) time.Time { return week.AddDate(0, 0, offset) }
+
+	at := func(offset, hour, minute int) time.Time {
+		return time.Date(2026, time.July, 6+offset, hour, minute, 0, 0, time.UTC)
+	}
+
+	type expectation struct {
+		title     string
+		firstCol  int
+		lastCol   int
+		multiDay  bool
+		continued bool
+		lane      int
+	}
+
+	cases := []struct {
+		name   string
+		events []calendar.Event
+		want   []expectation
+	}{
+		{
+			name: "bar keeps its lane and singles fill below",
+			events: []calendar.Event{
+				{ID: "1", Title: "Sprint", AllDay: true, Start: day(1), End: day(4)},
+				{ID: "2", Title: "Standup", Start: at(2, 9, 30), End: at(2, 9, 45)},
+			},
+			want: []expectation{
+				{title: "Sprint", firstCol: 1, lastCol: 3, multiDay: true, lane: 0},
+				{title: "Standup", firstCol: 2, lastCol: 2, lane: 1},
+			},
+		},
+		{
+			name: "event from previous week is clipped and continued",
+			events: []calendar.Event{
+				{ID: "1", Title: "Trip", AllDay: true, Start: day(-2), End: day(2)},
+			},
+			want: []expectation{
+				{title: "Trip", firstCol: 0, lastCol: 1, multiDay: true, continued: true, lane: 0},
+			},
+		},
+		{
+			name: "event past the week end is clipped at sunday",
+			events: []calendar.Event{
+				{ID: "1", Title: "Holiday", AllDay: true, Start: day(5), End: day(9)},
+			},
+			want: []expectation{
+				{title: "Holiday", firstCol: 5, lastCol: 6, multiDay: true, lane: 0},
+			},
+		},
+		{
+			name: "timed event crossing midnight spans both days",
+			events: []calendar.Event{
+				{ID: "1", Title: "Flight", Start: at(2, 16, 0), End: at(3, 9, 30)},
+			},
+			want: []expectation{
+				{title: "Flight", firstCol: 2, lastCol: 3, multiDay: true, lane: 0},
+			},
+		},
+		{
+			name: "midnight end stays on the start day",
+			events: []calendar.Event{
+				{ID: "1", Title: "Late show", Start: at(1, 22, 0), End: at(2, 0, 0)},
+			},
+			want: []expectation{
+				{title: "Late show", firstCol: 1, lastCol: 1, lane: 0},
+			},
+		},
+		{
+			name: "disjoint events share a lane",
+			events: []calendar.Event{
+				{ID: "1", Title: "Sprint", AllDay: true, Start: day(0), End: day(2)},
+				{ID: "2", Title: "Fair", AllDay: true, Start: day(3), End: day(5)},
+				{ID: "3", Title: "Standup", Start: at(2, 9, 30), End: at(2, 9, 45)},
+			},
+			want: []expectation{
+				{title: "Sprint", firstCol: 0, lastCol: 1, multiDay: true, lane: 0},
+				{title: "Fair", firstCol: 3, lastCol: 4, multiDay: true, lane: 0},
+				{title: "Standup", firstCol: 2, lastCol: 2, lane: 0},
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			model := New(fakeSource{events: testCase.events}, DefaultConfig(), time.UTC)
+
+			weekEvents, lanes := model.weekLayout(week)
+
+			if len(weekEvents) != len(testCase.want) {
+				t.Fatalf("laid out %d events, expected %d", len(weekEvents), len(testCase.want))
+			}
+
+			laneOf := map[int]int{}
+			for laneIndex, lane := range lanes {
+				for _, eventIndex := range lane {
+					if eventIndex >= 0 {
+						laneOf[eventIndex] = laneIndex
+					}
+				}
+			}
+
+			for _, expected := range testCase.want {
+				found := false
+				for index, entry := range weekEvents {
+					if entry.event.Title != expected.title {
+						continue
+					}
+
+					found = true
+
+					actual := expectation{
+						title:     entry.event.Title,
+						firstCol:  entry.firstCol,
+						lastCol:   entry.lastCol,
+						multiDay:  entry.multiDay,
+						continued: entry.continued,
+						lane:      laneOf[index],
+					}
+
+					if actual != expected {
+						t.Fatalf("layout for %q: got %+v, expected %+v", expected.title, actual, expected)
+					}
+				}
+
+				if !found {
+					t.Fatalf("event %q missing from layout", expected.title)
+				}
+			}
+		})
+	}
+}
+
+func TestDayEventsOrder(t *testing.T) {
+	week := time.Date(2026, time.July, 6, 0, 0, 0, 0, time.UTC)
+
+	wednesday := week.AddDate(0, 0, 2)
+
+	source := fakeSource{events: []calendar.Event{
+		{ID: "1", Title: "Standup", Start: wednesday.Add(9 * time.Hour), End: wednesday.Add(10 * time.Hour)},
+		{ID: "2", Title: "Holiday", AllDay: true, Start: wednesday, End: wednesday.AddDate(0, 0, 1)},
+		{ID: "3", Title: "Sprint", AllDay: true, Start: week.AddDate(0, 0, 1), End: week.AddDate(0, 0, 4)},
+	}}
+
+	model := New(source, DefaultConfig(), time.UTC)
+
+	var titles []string
+	for _, event := range model.dayEvents(wednesday) {
+		titles = append(titles, event.Title)
+	}
+
+	if !slices.Equal(titles, []string{"Sprint", "Holiday", "Standup"}) {
+		t.Fatalf("day order = %v, expected bar first then all-day then timed", titles)
+	}
+}
 
 func TestMondayOf(t *testing.T) {
 	cases := []struct {

@@ -307,7 +307,6 @@ func (m Model) View() string {
 	}
 
 	var headerCells [7]string
-	var bannerCells [7]string
 	var dayCells [7][halfHourRowCount]string
 
 	for dayIndex := range 7 {
@@ -333,41 +332,13 @@ func (m Model) View() string {
 
 		sort.SliceStable(events, func(i, j int) bool { return events[i].Start.Before(events[j].Start) })
 
-		var allDayEvents []calendar.Event
 		var timedEvents []calendar.Event
 		for _, event := range events {
 			if event.AllDay {
-				allDayEvents = append(allDayEvents, event)
-
 				continue
 			}
 
 			timedEvents = append(timedEvents, event)
-		}
-
-		bannerCells[dayIndex] = strings.Repeat(" ", columnWidth)
-
-		if len(allDayEvents) > 0 {
-			first := allDayEvents[0]
-
-			marker := ""
-			if len(allDayEvents) > 1 {
-				marker = fmt.Sprintf(" +%d", len(allDayEvents)-1)
-			}
-
-			chip := ansi.Truncate(" "+first.Title+" ", max(columnWidth-ansi.StringWidth(marker), 0), "…")
-
-			chipStyle := lipgloss.NewStyle().Background(lipgloss.Color(first.Color)).Foreground(selectedEventForeground)
-			if first.ID == m.yankedEventID {
-				chipStyle = yankedStyle
-			}
-			if selectedEventID != "" && first.ID == selectedEventID {
-				chipStyle = chipStyle.Reverse(true)
-			}
-
-			filler := strings.Repeat(" ", max(columnWidth-ansi.StringWidth(chip)-ansi.StringWidth(marker), 0))
-
-			bannerCells[dayIndex] = chipStyle.Render(chip) + mutedStyle.Render(marker) + filler
 		}
 
 		var clusters []eventCluster
@@ -520,16 +491,62 @@ func (m Model) View() string {
 	lines = append(lines, ansi.Truncate(headerLine, m.width, ""))
 	lines = append(lines, gridStyle.Render(strings.Repeat("─", m.width)))
 
-	if m.bannerRowCount() > 0 {
+	bannerEvents, bannerLanes := m.bannerLayout()
+
+	selectedColumn := (int(m.selectedDate.Weekday()) + 6) % 7
+
+	for _, lane := range bannerLanes {
 		var banner strings.Builder
 
 		banner.WriteString(strings.Repeat(" ", gutterWidth))
-		for dayIndex := range 7 {
-			if dayIndex > 0 {
+
+		column := 0
+		for column < 7 {
+			if column > 0 {
 				banner.WriteString(separator)
 			}
 
-			banner.WriteString(bannerCells[dayIndex])
+			if lane[column] < 0 {
+				banner.WriteString(strings.Repeat(" ", columnWidths[column]))
+
+				column++
+
+				continue
+			}
+
+			entry := bannerEvents[lane[column]]
+
+			runEnd := entry.lastCol
+
+			runWidth := runEnd - column
+			for spanned := column; spanned <= runEnd; spanned++ {
+				runWidth += columnWidths[spanned]
+			}
+
+			piece := " " + entry.event.Title + " "
+			if entry.continued {
+				piece = " ↳ " + entry.event.Title
+			}
+
+			chipStyle := lipgloss.NewStyle().Background(lipgloss.Color(entry.event.Color)).Foreground(selectedEventForeground)
+			if entry.event.ID == m.yankedEventID {
+				chipStyle = yankedStyle
+			}
+			if selectedEventID != "" && entry.event.ID == selectedEventID && column <= selectedColumn && selectedColumn <= runEnd {
+				chipStyle = chipStyle.Reverse(true)
+			}
+
+			truncated := ansi.Truncate(piece, runWidth, "…")
+
+			fillWidth := max(runWidth-ansi.StringWidth(truncated), 0)
+
+			if entry.multiDay && entry.event.ID != m.yankedEventID {
+				banner.WriteString(chipStyle.Render(truncated + strings.Repeat(" ", fillWidth)))
+			} else {
+				banner.WriteString(chipStyle.Render(truncated) + strings.Repeat(" ", fillWidth))
+			}
+
+			column = runEnd + 1
 		}
 
 		lines = append(lines, ansi.Truncate(banner.String(), m.width, ""))
@@ -620,12 +637,130 @@ func (m Model) moveCursor(target time.Time) (Model, tea.Cmd) {
 }
 
 func (m Model) selectedDayEvents() []calendar.Event {
-	events := m.source.Events(m.selectedDate, m.selectedDate.AddDate(0, 0, 1))
+	bannerEvents, lanes := m.bannerLayout()
 
-	sort.SliceStable(events, func(i, j int) bool { return events[i].Start.Before(events[j].Start) })
-	sort.SliceStable(events, func(i, j int) bool { return events[i].AllDay && !events[j].AllDay })
+	column := (int(m.selectedDate.Weekday()) + 6) % 7
 
-	return events
+	var events []calendar.Event
+	for _, lane := range lanes {
+		if lane[column] >= 0 {
+			events = append(events, bannerEvents[lane[column]].event)
+		}
+	}
+
+	var timedEvents []calendar.Event
+	for _, event := range m.source.Events(m.selectedDate, m.selectedDate.AddDate(0, 0, 1)) {
+		if event.AllDay {
+			continue
+		}
+
+		timedEvents = append(timedEvents, event)
+	}
+
+	sort.SliceStable(timedEvents, func(i, j int) bool { return timedEvents[i].Start.Before(timedEvents[j].Start) })
+
+	return append(events, timedEvents...)
+}
+
+type bannerEvent struct {
+	event     calendar.Event
+	firstCol  int
+	lastCol   int
+	multiDay  bool
+	continued bool
+}
+
+func (m Model) bannerLayout() ([]bannerEvent, [][7]int) {
+	var bannerEvents []bannerEvent
+
+	for _, event := range m.source.Events(m.weekMonday, m.weekMonday.AddDate(0, 0, 7)) {
+		if !event.AllDay {
+			continue
+		}
+
+		localStart := event.Start.In(m.weekMonday.Location())
+
+		localEnd := event.End.In(m.weekMonday.Location())
+
+		startDay := time.Date(localStart.Year(), localStart.Month(), localStart.Day(), 0, 0, 0, 0, m.weekMonday.Location())
+
+		endDay := time.Date(localEnd.Year(), localEnd.Month(), localEnd.Day(), 0, 0, 0, 0, m.weekMonday.Location())
+		if localEnd.Equal(endDay) {
+			endDay = endDay.AddDate(0, 0, -1)
+		}
+		if endDay.Before(startDay) {
+			endDay = startDay
+		}
+
+		firstCol, lastCol := 0, 6
+		for column := range 7 {
+			day := m.weekMonday.AddDate(0, 0, column)
+
+			if day.Equal(startDay) {
+				firstCol = column
+			}
+			if day.Equal(endDay) {
+				lastCol = column
+			}
+		}
+
+		bannerEvents = append(bannerEvents, bannerEvent{
+			event:     event,
+			firstCol:  firstCol,
+			lastCol:   lastCol,
+			multiDay:  endDay.After(startDay),
+			continued: startDay.Before(m.weekMonday),
+		})
+	}
+
+	sort.SliceStable(bannerEvents, func(i, j int) bool {
+		spanI := bannerEvents[i].lastCol - bannerEvents[i].firstCol
+
+		spanJ := bannerEvents[j].lastCol - bannerEvents[j].firstCol
+
+		switch {
+		case spanI != spanJ:
+			return spanI > spanJ
+		case !bannerEvents[i].event.Start.Equal(bannerEvents[j].event.Start):
+			return bannerEvents[i].event.Start.Before(bannerEvents[j].event.Start)
+		default:
+			return bannerEvents[i].event.Title < bannerEvents[j].event.Title
+		}
+	})
+
+	var lanes [][7]int
+
+	for index, entry := range bannerEvents {
+		assignedLane := -1
+
+		for laneIndex := range lanes {
+			free := true
+			for column := entry.firstCol; column <= entry.lastCol; column++ {
+				if lanes[laneIndex][column] >= 0 {
+					free = false
+
+					break
+				}
+			}
+
+			if free {
+				assignedLane = laneIndex
+
+				break
+			}
+		}
+
+		if assignedLane < 0 {
+			lanes = append(lanes, [7]int{-1, -1, -1, -1, -1, -1, -1})
+			assignedLane = len(lanes) - 1
+		}
+
+		for column := entry.firstCol; column <= entry.lastCol; column++ {
+			lanes[assignedLane][column] = index
+		}
+	}
+
+	return bannerEvents, lanes
 }
 
 func (m Model) clampScroll(offset int) int {
@@ -639,17 +774,9 @@ func (m Model) visibleRows() int {
 }
 
 func (m Model) bannerRowCount() int {
-	for dayIndex := range 7 {
-		day := m.weekMonday.AddDate(0, 0, dayIndex)
+	_, lanes := m.bannerLayout()
 
-		for _, event := range m.source.Events(day, day.AddDate(0, 0, 1)) {
-			if event.AllDay {
-				return 1
-			}
-		}
-	}
-
-	return 0
+	return len(lanes)
 }
 
 func (m Model) initialScroll() int {

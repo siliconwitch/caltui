@@ -257,11 +257,117 @@ func (m Model) scrolledTopWeek() time.Time {
 func (m Model) dayEvents(date time.Time) []calendar.Event {
 	dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 
-	events := m.source.Events(dayStart, dayStart.AddDate(0, 0, 1))
+	weekEvents, lanes := m.weekLayout(mondayOf(dayStart))
 
-	sort.SliceStable(events, func(i, j int) bool { return events[i].AllDay && !events[j].AllDay })
+	column := (int(dayStart.Weekday()) + 6) % 7
+
+	var events []calendar.Event
+	for _, lane := range lanes {
+		if lane[column] >= 0 {
+			events = append(events, weekEvents[lane[column]].event)
+		}
+	}
 
 	return events
+}
+
+type weekEvent struct {
+	event     calendar.Event
+	firstCol  int
+	lastCol   int
+	multiDay  bool
+	continued bool
+}
+
+func (m Model) weekLayout(week time.Time) ([]weekEvent, [][7]int) {
+	var weekEvents []weekEvent
+
+	for _, event := range m.source.Events(week, week.AddDate(0, 0, 7)) {
+		localStart := event.Start.In(week.Location())
+
+		localEnd := event.End.In(week.Location())
+
+		startDay := time.Date(localStart.Year(), localStart.Month(), localStart.Day(), 0, 0, 0, 0, week.Location())
+
+		endDay := time.Date(localEnd.Year(), localEnd.Month(), localEnd.Day(), 0, 0, 0, 0, week.Location())
+		if localEnd.Equal(endDay) {
+			endDay = endDay.AddDate(0, 0, -1)
+		}
+		if endDay.Before(startDay) {
+			endDay = startDay
+		}
+
+		firstCol, lastCol := 0, 6
+		for column := range 7 {
+			day := week.AddDate(0, 0, column)
+
+			if day.Equal(startDay) {
+				firstCol = column
+			}
+			if day.Equal(endDay) {
+				lastCol = column
+			}
+		}
+
+		weekEvents = append(weekEvents, weekEvent{
+			event:     event,
+			firstCol:  firstCol,
+			lastCol:   lastCol,
+			multiDay:  endDay.After(startDay),
+			continued: startDay.Before(week),
+		})
+	}
+
+	sort.SliceStable(weekEvents, func(i, j int) bool {
+		spanI := weekEvents[i].lastCol - weekEvents[i].firstCol
+
+		spanJ := weekEvents[j].lastCol - weekEvents[j].firstCol
+
+		switch {
+		case spanI != spanJ:
+			return spanI > spanJ
+		case weekEvents[i].event.AllDay != weekEvents[j].event.AllDay:
+			return weekEvents[i].event.AllDay
+		case !weekEvents[i].event.Start.Equal(weekEvents[j].event.Start):
+			return weekEvents[i].event.Start.Before(weekEvents[j].event.Start)
+		default:
+			return weekEvents[i].event.Title < weekEvents[j].event.Title
+		}
+	})
+
+	var lanes [][7]int
+
+	for index, entry := range weekEvents {
+		assignedLane := -1
+
+		for laneIndex := range lanes {
+			free := true
+			for column := entry.firstCol; column <= entry.lastCol; column++ {
+				if lanes[laneIndex][column] >= 0 {
+					free = false
+
+					break
+				}
+			}
+
+			if free {
+				assignedLane = laneIndex
+
+				break
+			}
+		}
+
+		if assignedLane < 0 {
+			lanes = append(lanes, [7]int{-1, -1, -1, -1, -1, -1, -1})
+			assignedLane = len(lanes) - 1
+		}
+
+		for column := entry.firstCol; column <= entry.lastCol; column++ {
+			lanes[assignedLane][column] = index
+		}
+	}
+
+	return weekEvents, lanes
 }
 
 func (m Model) FocusedDate() time.Time {
@@ -347,18 +453,54 @@ func (m Model) View() string {
 		week = mondayOf(m.selectedDate)
 	}
 
+	selectedID := ""
+	if selected := m.SelectedEvent(); selected != nil {
+		selectedID = selected.ID
+	}
+
 	for _, weekRowHeight := range heights {
 		if weekRowHeight <= 0 {
 			continue
 		}
 
 		contentLineCount := weekRowHeight - 1
+		laneCapacity := contentLineCount - 1
 
-		weekDays := make([]time.Time, 7)
-		weekEvents := make([][]calendar.Event, 7)
+		weekEvents, lanes := m.weekLayout(week)
+
+		var weekDays [7]time.Time
 		for column := range weekDays {
 			weekDays[column] = week.AddDate(0, 0, column)
-			weekEvents[column] = m.dayEvents(weekDays[column])
+		}
+
+		selectedColumn := -1
+		for column, day := range weekDays {
+			if day.Equal(m.selectedDate) {
+				selectedColumn = column
+			}
+		}
+
+		var overflowing [7]bool
+		var hiddenCounts [7]int
+
+		if laneCapacity >= 1 {
+			for column := range 7 {
+				for laneIndex := laneCapacity; laneIndex < len(lanes); laneIndex++ {
+					if lanes[laneIndex][column] >= 0 {
+						overflowing[column] = true
+					}
+				}
+
+				if !overflowing[column] {
+					continue
+				}
+
+				for laneIndex := laneCapacity - 1; laneIndex < len(lanes); laneIndex++ {
+					if lanes[laneIndex][column] >= 0 {
+						hiddenCounts[column]++
+					}
+				}
+			}
 		}
 
 		for lineIndex := range contentLineCount {
@@ -373,93 +515,151 @@ func (m Model) View() string {
 				row.WriteString(strings.Repeat(" ", gutterWidth))
 			}
 
-			for column := range weekDays {
+			if lineIndex == 0 {
+				for column, day := range weekDays {
+					if column > 0 {
+						row.WriteString(gridStyle.Render("│"))
+					}
+
+					cellWidth := max(0, cellWidths[column])
+
+					base := lipgloss.NewStyle()
+					if day.Equal(m.selectedDate) {
+						base = base.Background(theme.SelectionBg)
+					}
+
+					piece := " " + strconv.Itoa(day.Day())
+					pieceStyle := base
+
+					switch {
+					case day.Equal(today):
+						piece = " " + strconv.Itoa(day.Day()) + " "
+						if day.Day() == 1 {
+							piece = " " + day.Format("2 Jan") + " "
+						}
+
+						pieceStyle = lipgloss.NewStyle().Background(theme.Accent).Foreground(todayForeground)
+
+					case day.Day() == 1:
+						piece = " " + day.Format("2 Jan")
+						pieceStyle = base.Foreground(theme.Accent).Bold(true)
+
+					case day.Weekday() == time.Saturday || day.Weekday() == time.Sunday:
+						pieceStyle = base.Foreground(theme.Muted)
+					}
+
+					truncated := ansi.Truncate(piece, cellWidth, "…")
+
+					padding := base.Render(strings.Repeat(" ", max(0, cellWidth-ansi.StringWidth(truncated))))
+
+					row.WriteString(pieceStyle.Render(truncated) + padding)
+				}
+
+				lines = append(lines, row.String())
+
+				continue
+			}
+
+			laneIndex := lineIndex - 1
+
+			column := 0
+			for column < 7 {
 				if column > 0 {
 					row.WriteString(gridStyle.Render("│"))
 				}
 
-				day := weekDays[column]
-				events := weekEvents[column]
 				cellWidth := max(0, cellWidths[column])
-				selected := day.Equal(m.selectedDate)
 
 				base := lipgloss.NewStyle()
-				if selected {
+				if weekDays[column].Equal(m.selectedDate) {
 					base = base.Background(theme.SelectionBg)
 				}
 
-				piece := ""
-				pieceStyle := base
+				if overflowing[column] && lineIndex == contentLineCount-1 {
+					piece := fmt.Sprintf(" +%d more", hiddenCounts[column])
 
-				switch {
-				case lineIndex == 0 && day.Equal(today):
-					piece = " " + strconv.Itoa(day.Day()) + " "
-					if day.Day() == 1 {
-						piece = " " + day.Format("2 Jan") + " "
-					}
+					truncated := ansi.Truncate(piece, cellWidth, "…")
 
-					pieceStyle = lipgloss.NewStyle().Background(theme.Accent).Foreground(todayForeground)
+					padding := base.Render(strings.Repeat(" ", max(0, cellWidth-ansi.StringWidth(truncated))))
 
-				case lineIndex == 0 && day.Day() == 1:
-					piece = " " + day.Format("2 Jan")
-					pieceStyle = base.Foreground(theme.Accent).Bold(true)
+					row.WriteString(base.Foreground(theme.Muted).Render(truncated) + padding)
 
-				case lineIndex == 0 && (day.Weekday() == time.Saturday || day.Weekday() == time.Sunday):
-					piece = " " + strconv.Itoa(day.Day())
-					pieceStyle = base.Foreground(theme.Muted)
+					column++
 
-				case lineIndex == 0:
-					piece = " " + strconv.Itoa(day.Day())
-
-				default:
-					eventIndex := lineIndex - 1
-					eventLineCapacity := contentLineCount - 1
-					overflowing := len(events) > eventLineCapacity
-
-					switch {
-					case overflowing && lineIndex == contentLineCount-1:
-						hiddenCount := len(events) - (eventLineCapacity - 1)
-
-						piece = fmt.Sprintf(" +%d more", hiddenCount)
-						pieceStyle = base.Foreground(theme.Muted)
-
-					case eventIndex < len(events):
-						event := events[eventIndex]
-
-						switch {
-						case event.AllDay:
-							piece = " " + event.Title + " "
-						case event.Start.Before(day):
-							piece = " ↳ " + event.Title
-						default:
-							timeLabel := event.Start.Format("15:04")
-							if marker := timezone.Marker(event.Start, m.location); marker != "" {
-								timeLabel += " " + marker
-							}
-
-							piece = " " + timeLabel + " " + event.Title
-						}
-
-						switch {
-						case event.ID == m.yankedEventID:
-							pieceStyle = base.Foreground(theme.Yank).Italic(true)
-						case event.AllDay:
-							pieceStyle = lipgloss.NewStyle().Background(lipgloss.Color(event.Color)).Foreground(allDayForeground)
-						default:
-							pieceStyle = base.Foreground(lipgloss.Color(event.Color))
-						}
-
-						if selected && eventIndex == m.selectedEventIndex {
-							pieceStyle = pieceStyle.Reverse(true)
-						}
-					}
+					continue
 				}
 
-				truncated := ansi.Truncate(piece, cellWidth, "…")
+				eventIndex := -1
+				if laneIndex < len(lanes) && (!overflowing[column] || laneIndex < laneCapacity-1) {
+					eventIndex = lanes[laneIndex][column]
+				}
 
-				padding := base.Render(strings.Repeat(" ", max(0, cellWidth-ansi.StringWidth(truncated))))
+				if eventIndex < 0 {
+					row.WriteString(base.Render(strings.Repeat(" ", cellWidth)))
 
-				row.WriteString(pieceStyle.Render(truncated) + padding)
+					column++
+
+					continue
+				}
+
+				entry := weekEvents[eventIndex]
+				event := entry.event
+
+				runEnd := column
+				for runEnd+1 <= entry.lastCol && (!overflowing[runEnd+1] || laneIndex < laneCapacity-1) {
+					runEnd++
+				}
+
+				runWidth := runEnd - column
+				for spanned := column; spanned <= runEnd; spanned++ {
+					runWidth += max(0, cellWidths[spanned])
+				}
+
+				piece := ""
+				switch {
+				case entry.continued || column > entry.firstCol:
+					piece = " ↳ " + event.Title
+				case event.AllDay:
+					piece = " " + event.Title + " "
+				default:
+					timeLabel := event.Start.Format("15:04")
+					if marker := timezone.Marker(event.Start, m.location); marker != "" {
+						timeLabel += " " + marker
+					}
+
+					piece = " " + timeLabel + " " + event.Title
+				}
+
+				pieceBase := base
+				if runEnd > column {
+					pieceBase = lipgloss.NewStyle()
+				}
+
+				pieceStyle := pieceBase
+				switch {
+				case event.ID == m.yankedEventID:
+					pieceStyle = pieceBase.Foreground(theme.Yank).Italic(true)
+				case event.AllDay || entry.multiDay:
+					pieceStyle = lipgloss.NewStyle().Background(lipgloss.Color(event.Color)).Foreground(allDayForeground)
+				default:
+					pieceStyle = pieceBase.Foreground(lipgloss.Color(event.Color))
+				}
+
+				if selectedID != "" && event.ID == selectedID && column <= selectedColumn && selectedColumn <= runEnd {
+					pieceStyle = pieceStyle.Reverse(true)
+				}
+
+				truncated := ansi.Truncate(piece, runWidth, "…")
+
+				fillWidth := max(0, runWidth-ansi.StringWidth(truncated))
+
+				if entry.multiDay && event.ID != m.yankedEventID {
+					row.WriteString(pieceStyle.Render(truncated + strings.Repeat(" ", fillWidth)))
+				} else {
+					row.WriteString(pieceStyle.Render(truncated) + pieceBase.Render(strings.Repeat(" ", fillWidth)))
+				}
+
+				column = runEnd + 1
 			}
 
 			lines = append(lines, row.String())
