@@ -1,6 +1,7 @@
 package timezone
 
 import (
+	"fmt"
 	"strings"
 	"time"
 	_ "time/tzdata"
@@ -25,33 +26,61 @@ func Marker(t time.Time, base *time.Location) string {
 	return "(" + abbreviation + ")"
 }
 
-func Search(query string) []string {
-	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(query), " ", "_"))
+func Search(query string) []zone {
+	normalized := strings.ToLower(strings.TrimSpace(query))
+	normalized = strings.ReplaceAll(normalized, "_", " ")
 
 	if normalized == "" {
-		return zoneNames
+		return zones
 	}
 
-	var cityMatches, otherMatches []string
-	for _, name := range zoneNames {
-		lower := strings.ToLower(name)
+	var cityMatches, countryMatches, substringMatches, fuzzyMatches []zone
 
-		city := lower[strings.LastIndex(lower, "/")+1:]
+	for _, candidate := range zones {
+		name := strings.ToLower(strings.ReplaceAll(candidate.name, "_", " "))
+
+		country := strings.ToLower(candidate.country)
+
+		city := name[strings.LastIndex(name, "/")+1:]
 
 		switch {
 		case strings.HasPrefix(city, normalized):
-			cityMatches = append(cityMatches, name)
-		case strings.Contains(lower, normalized):
-			otherMatches = append(otherMatches, name)
+			cityMatches = append(cityMatches, candidate)
+
+		case strings.HasPrefix(country, normalized):
+			countryMatches = append(countryMatches, candidate)
+
+		case strings.Contains(name, normalized) || strings.Contains(country, normalized):
+			substringMatches = append(substringMatches, candidate)
+
+		default:
+			for _, haystack := range []string{name, country} {
+				remaining := normalized
+				for index := 0; index < len(haystack) && remaining != ""; index++ {
+					if haystack[index] == remaining[0] {
+						remaining = remaining[1:]
+					}
+				}
+
+				if remaining == "" {
+					fuzzyMatches = append(fuzzyMatches, candidate)
+
+					break
+				}
+			}
 		}
 	}
 
-	return append(cityMatches, otherMatches...)
+	matches := append(cityMatches, countryMatches...)
+	matches = append(matches, substringMatches...)
+
+	return append(matches, fuzzyMatches...)
 }
 
 type Picker struct {
 	query     string
 	cursor    int
+	scroll    int
 	reference time.Time
 }
 
@@ -62,6 +91,7 @@ func NewPicker() Picker {
 func (p Picker) Opened(reference time.Time, query string) Picker {
 	p.query = query
 	p.cursor = 0
+	p.scroll = 0
 	p.reference = reference
 
 	return p
@@ -79,7 +109,7 @@ func (p Picker) Typed(key string) (Picker, *time.Location, bool) {
 			return p, nil, false
 		}
 
-		location, err := time.LoadLocation(matches[min(p.cursor, len(matches)-1)])
+		location, err := time.LoadLocation(matches[min(p.cursor, len(matches)-1)].name)
 
 		if err != nil {
 			return p, nil, false
@@ -87,15 +117,26 @@ func (p Picker) Typed(key string) (Picker, *time.Location, bool) {
 
 		return p, location, true
 
-	case "up":
-		p.cursor = max(p.cursor-1, 0)
+	case "up", "down", "pgup", "pgdown":
+		lastIndex := max(len(Search(p.query))-1, 0)
 
-		return p, nil, false
+		switch key {
+		case "up":
+			p.cursor = max(p.cursor-1, 0)
+		case "down":
+			p.cursor = min(p.cursor+1, lastIndex)
+		case "pgup":
+			p.cursor = max(p.cursor-visibleMatchCount, 0)
+		case "pgdown":
+			p.cursor = min(p.cursor+visibleMatchCount, lastIndex)
+		}
 
-	case "down":
-		limit := min(len(Search(p.query)), visibleMatchCount)
-
-		p.cursor = min(p.cursor+1, max(limit-1, 0))
+		switch {
+		case p.cursor < p.scroll:
+			p.scroll = p.cursor
+		case p.cursor >= p.scroll+visibleMatchCount:
+			p.scroll = p.cursor - visibleMatchCount + 1
+		}
 
 		return p, nil, false
 
@@ -103,6 +144,7 @@ func (p Picker) Typed(key string) (Picker, *time.Location, bool) {
 		if p.query != "" {
 			p.query = p.query[:len(p.query)-1]
 			p.cursor = 0
+			p.scroll = 0
 		}
 
 		return p, nil, false
@@ -121,6 +163,7 @@ func (p Picker) Typed(key string) (Picker, *time.Location, bool) {
 
 	p.query += key
 	p.cursor = 0
+	p.scroll = 0
 
 	return p, nil, false
 }
@@ -129,17 +172,29 @@ func (p Picker) View(width int) []string {
 	mutedStyle := lipgloss.NewStyle().Foreground(theme.Muted)
 	accentStyle := lipgloss.NewStyle().Foreground(theme.Accent)
 
-	lines := []string{accentStyle.Render("Search: ") + p.query + accentStyle.Render("▏")}
+	searchLine := accentStyle.Render("Search: ") + p.query + accentStyle.Render("▏")
 
 	matches := Search(p.query)
 
 	if len(matches) == 0 {
-		return append(lines, mutedStyle.Render("no matches"))
+		return []string{searchLine, mutedStyle.Render("no matches")}
 	}
 
-	for index, name := range matches[:min(len(matches), visibleMatchCount)] {
+	cursor := min(p.cursor, len(matches)-1)
+
+	scroll := min(p.scroll, max(len(matches)-visibleMatchCount, 0))
+
+	position := fmt.Sprintf("%d/%d", cursor+1, len(matches))
+
+	searchWidth := ansi.StringWidth("Search: "+p.query+"▏") + ansi.StringWidth(position)
+
+	lines := []string{searchLine + strings.Repeat(" ", max(width-searchWidth, 1)) + mutedStyle.Render(position)}
+
+	for index := scroll; index < min(len(matches), scroll+visibleMatchCount); index++ {
+		match := matches[index]
+
 		abbreviation := ""
-		if location, err := time.LoadLocation(name); err == nil {
+		if location, err := time.LoadLocation(match.name); err == nil {
 			sample := time.Date(
 				p.reference.Year(), p.reference.Month(), p.reference.Day(),
 				p.reference.Hour(), p.reference.Minute(), 0, 0, location,
@@ -148,13 +203,16 @@ func (p Picker) View(width int) []string {
 			abbreviation, _ = sample.Zone()
 		}
 
-		row := ansi.Truncate(name, max(width-6, 1), "…")
+		detail := strings.TrimSpace(match.country + " " + abbreviation)
+		detail = ansi.Truncate(detail, max(width/2, 1), "…")
 
-		padding := strings.Repeat(" ", max(width-ansi.StringWidth(row)-ansi.StringWidth(abbreviation), 1))
+		row := ansi.Truncate(match.name, max(width-ansi.StringWidth(detail)-2, 1), "…")
 
-		line := row + padding + mutedStyle.Render(abbreviation)
-		if index == p.cursor {
-			line = lipgloss.NewStyle().Reverse(true).Render(row+padding) + mutedStyle.Reverse(true).Render(abbreviation)
+		padding := strings.Repeat(" ", max(width-ansi.StringWidth(row)-ansi.StringWidth(detail), 1))
+
+		line := row + padding + mutedStyle.Render(detail)
+		if index == cursor {
+			line = lipgloss.NewStyle().Reverse(true).Render(row+padding) + mutedStyle.Reverse(true).Render(detail)
 		}
 
 		lines = append(lines, line)

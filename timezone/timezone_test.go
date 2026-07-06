@@ -15,16 +15,22 @@ func TestSearch(t *testing.T) {
 		{name: "city with space", query: "los angeles", wantFirst: "America/Los_Angeles"},
 		{name: "partial city", query: "kolk", wantFirst: "Asia/Kolkata"},
 		{name: "region substring", query: "europe/st", wantFirst: "Europe/Stockholm"},
+		{name: "country", query: "sweden", wantFirst: "Europe/Stockholm"},
+		{name: "country without city zone", query: "japan", wantFirst: "Asia/Tokyo"},
+		{name: "partial country", query: "vietn", wantFirst: "Asia/Ho_Chi_Minh"},
+		{name: "utc", query: "utc", wantFirst: "UTC"},
+		{name: "fuzzy city", query: "stkhlm", wantFirst: "Europe/Stockholm"},
+		{name: "fuzzy country", query: "grmany", wantFirst: "Europe/Berlin"},
 	}
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			matches := Search(testCase.query)
 
-			if len(matches) == 0 || matches[0] != testCase.wantFirst {
+			if len(matches) == 0 || matches[0].name != testCase.wantFirst {
 				got := "none"
 				if len(matches) > 0 {
-					got = matches[0]
+					got = matches[0].name
 				}
 
 				t.Fatalf("first match for %q: got %s, want %s", testCase.query, got, testCase.wantFirst)
@@ -32,7 +38,7 @@ func TestSearch(t *testing.T) {
 		})
 	}
 
-	if len(Search("")) != len(zoneNames) {
+	if len(Search("")) != len(zones) {
 		t.Fatalf("empty query must return every zone")
 	}
 }
