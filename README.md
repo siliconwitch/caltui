@@ -58,8 +58,8 @@ _Looking for maintainers._
 Run `caltui` in a terminal. It opens on a month view, with week and day views
 a keypress away (`m`/`w`/`d`), and vim-style keys for moving around and
 managing events. A context-sensitive hint bar at the bottom of the screen
-shows the keys available at any moment. Note: while the UI is being finalised,
-caltui currently ships with sample events rather than your real calendars.
+shows the keys available at any moment. Until you configure an account (see
+below), caltui shows sample events so you can explore the UI.
 
 ### Keybindings
 
@@ -75,6 +75,7 @@ caltui currently ships with sample events rather than your real calendars.
 | `p`                 | Paste event                   |
 | `t`                 | Jump to today                 |
 | `g`                 | Go to date                    |
+| `r`                 | Refresh accounts              |
 | `esc`               | Deselect / close popup        |
 | `q`                 | Quit                          |
 
@@ -100,6 +101,101 @@ day_end = "24:00"
 day_start = "00:00"
 day_end = "24:00"
 ```
+
+## Accounts
+
+Accounts connect caltui to real calendars and are declared in the same config
+file. Two account types are supported:
+
+- **`caldav`** — read/write. Works with every provider that speaks CalDAV
+  with an app password: iCloud, Fastmail, Nextcloud, Radicale, Zoho and
+  others. Generate an app password in your provider's security settings;
+  `url` is the provider's CalDAV root and calendars are discovered
+  automatically. Discovery tries the URL itself, then the server's
+  `/.well-known/caldav` (needed by e.g. Zoho), then treats the URL as a
+  single calendar — so if in doubt, the exact CalDAV address from your
+  provider's settings always works.
+- **`ics`** — read-only subscription to an iCalendar URL. This is how you
+  connect Google Calendar without OAuth: copy the calendar's *"Secret address
+  in iCal format"* from its settings. Any published `.ics` link works too.
+
+```toml
+[[accounts]]
+name = "fastmail"
+type = "caldav"
+url = "https://caldav.fastmail.com"
+username = "raj@fastmail.com"
+credential_command = "pass show caltui/fastmail"
+
+[[accounts]]
+name = "google"
+type = "ics"
+credential_command = "pass show caltui/google-ics-url"
+```
+
+Events sync on startup and on `r`, and are cached locally so views open
+instantly and work offline. Events within one year either side of today are
+synced. Sync and save problems open an error popup — `y` yanks the error text to
+the clipboard (via OSC 52, so it works over SSH too), any other key
+dismisses it, and further queued errors follow one at a time. Editing and deleting
+recurring events is not supported yet; those events, and everything in an
+`ics` subscription, are read-only.
+
+## Security
+
+caltui is designed so that account data is easy to lock down with mandatory
+access control, and so that your config file stays publishable in a dotfiles
+repository. It touches exactly three fixed paths:
+
+| Path                              | Contents                       | Access     |
+| --------------------------------- | ------------------------------ | ---------- |
+| `~/.config/caltui/config.toml`    | Config. Never secrets.         | Read       |
+| `~/.local/state/caltui/`          | `credentials.toml` secrets     | Read       |
+| `~/.cache/caltui/`                | Event cache. Safe to delete.   | Read/write |
+
+Secrets — app passwords and secret ics URLs — reach caltui one of two ways,
+per account:
+
+- **`credential_command`** — a shell command whose output is the secret, e.g.
+  `pass show caltui/fastmail` or
+  `secret-tool lookup service caltui account fastmail`. The config stays free
+  of secrets because it only names the command.
+- **`~/.local/state/caltui/credentials.toml`** — a plain file for setups
+  where spawning helpers is undesirable (this keeps an AppArmor profile
+  exec-free). caltui refuses to read it unless it is `chmod 600`:
+
+  ```toml
+  [fastmail]
+  secret = "app-password-here"
+
+  [google]
+  secret = "https://calendar.google.com/calendar/ical/…/basic.ics"
+  ```
+
+If you'd rather not publish your email address or server either, leave
+`username` and `url` out of the config too — caltui falls back to `username`
+and `url` keys in the account's `credentials.toml` section:
+
+```toml
+[fastmail]
+username = "raj@fastmail.com"
+url = "https://caldav.fastmail.com"
+secret = "app-password-here"
+```
+
+An AppArmor profile covering exactly this footprint ships in
+[`contrib/apparmor/caltui`](contrib/apparmor/caltui):
+
+```sh
+sudo install -Dm644 contrib/apparmor/caltui /etc/apparmor.d/caltui
+sudo apparmor_parser -r /etc/apparmor.d/caltui
+```
+
+The defaults honour `$XDG_CONFIG_HOME`, `$XDG_STATE_HOME` and the
+`CALTUI_CONFIG`, `CALTUI_CREDENTIALS` and `CALTUI_CACHE` overrides, but the
+shipped profile confines the default paths. The binary is static
+(`CGO_ENABLED=0`), timezone data is embedded, and sync errors never echo
+secret URLs.
 
 ## Contributing
 

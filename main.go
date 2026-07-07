@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"time"
+	_ "time/tzdata"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/siliconwitch/caltui/widgets/confirm"
 	"github.com/siliconwitch/caltui/widgets/dayview"
 	"github.com/siliconwitch/caltui/widgets/detail"
+	"github.com/siliconwitch/caltui/widgets/errorpopup"
 	"github.com/siliconwitch/caltui/widgets/eventform"
 	"github.com/siliconwitch/caltui/widgets/gotodate"
 	"github.com/siliconwitch/caltui/widgets/monthview"
@@ -25,11 +27,14 @@ func main() {
 	dayConfig := dayview.DefaultConfig()
 	calendarConfig := calendar.DefaultConfig()
 
+	var accounts []calendar.Account
+
 	err := config.Load(map[string]any{
-		monthview.ConfigSection: &monthConfig,
-		weekview.ConfigSection:  &weekConfig,
-		dayview.ConfigSection:   &dayConfig,
-		calendar.ConfigSection:  &calendarConfig,
+		monthview.ConfigSection:  &monthConfig,
+		weekview.ConfigSection:   &weekConfig,
+		dayview.ConfigSection:    &dayConfig,
+		calendar.ConfigSection:   &calendarConfig,
+		calendar.AccountsSection: &accounts,
 	})
 
 	if err != nil {
@@ -44,16 +49,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	store := calendar.NewMock(time.Now().In(location))
+	var store calendar.Store
+
+	if len(accounts) == 0 {
+		store = calendar.NewMock(time.Now().In(location))
+	} else {
+		store, err = calendar.NewRemote(accounts, location, time.Now().In(location))
+
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "caltui:", err)
+			os.Exit(1)
+		}
+	}
 
 	root := tui.New(store,
 		monthview.New(store, monthConfig, location),
 		weekview.New(store, weekConfig, location),
 		dayview.New(store, dayConfig, location),
-		eventform.New(store.Calendars(), location),
+		eventform.New(calendar.WritableCalendars(store), location),
 		confirm.New(),
 		gotodate.New(),
 		detail.New(location),
+		errorpopup.New(),
 	)
 
 	program := tea.NewProgram(root, tea.WithAltScreen())

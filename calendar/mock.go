@@ -179,7 +179,7 @@ func (m *Mock) Events(from, to time.Time) []Event {
 	return events
 }
 
-func (m *Mock) Add(event Event) Event {
+func (m *Mock) Add(event Event) (Event, error) {
 	if event.ID == "" {
 		event.ID = fmt.Sprintf("mock-%d", m.nextID)
 		m.nextID++
@@ -188,16 +188,20 @@ func (m *Mock) Add(event Event) Event {
 	event.Color = m.colorFor(event.Calendar)
 	m.events[event.ID] = event
 
-	return event
+	return event, nil
 }
 
-func (m *Mock) Update(event Event) {
+func (m *Mock) Update(event Event) error {
 	event.Color = m.colorFor(event.Calendar)
 	m.events[event.ID] = event
+
+	return nil
 }
 
-func (m *Mock) Delete(id string) {
+func (m *Mock) Delete(id string) error {
 	delete(m.events, id)
+
+	return nil
 }
 
 func (m *Mock) colorFor(name string) string {

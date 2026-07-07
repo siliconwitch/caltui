@@ -58,6 +58,12 @@ General and meant to be reused verbatim across projects.
 - **Declarative, decentralized config.** Each unit owns its config struct,
   defaults, and section name; one generic, unit-agnostic loader overlays the
   on-disk file. Adding or changing config never touches the loader.
+- **Three-path data split.** Publishable config lives under XDG config,
+  secrets under XDG state (0600-enforced, or produced by a credential
+  command), and disposable caches under XDG cache. Defaults stay fixed so
+  mandatory-access-control profiles can be shipped for them. Secrets never
+  appear in the config file, in cache files, or in error messages shown on
+  screen.
 
 ## Operational principles
 

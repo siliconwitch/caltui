@@ -11,38 +11,53 @@ import (
 	"github.com/siliconwitch/caltui/msgs"
 )
 
-type Model struct {
-	store     calendar.Store
-	month     tea.Model
-	week      tea.Model
-	day       tea.Model
-	form      tea.Model
-	confirm   tea.Model
-	gotoDate  tea.Model
-	detail    tea.Model
-	active    string
-	popup     string
-	clipboard *calendar.Event
-	width     int
-	height    int
+type syncer interface {
+	AccountNames() []string
+	Sync(account string) error
 }
 
-func New(store calendar.Store, month, week, day, form, confirm, gotoDate, detail tea.Model) Model {
-	return Model{
-		store:    store,
-		month:    month,
-		week:     week,
-		day:      day,
-		form:     form,
-		confirm:  confirm,
-		gotoDate: gotoDate,
-		detail:   detail,
-		active:   "month",
+type Model struct {
+	store        calendar.Store
+	month        tea.Model
+	week         tea.Model
+	day          tea.Model
+	form         tea.Model
+	confirm      tea.Model
+	gotoDate     tea.Model
+	detail       tea.Model
+	errorPopup   tea.Model
+	active       string
+	popup        string
+	clipboard    *calendar.Event
+	width        int
+	height       int
+	pendingSyncs int
+	notice       string
+}
+
+func New(store calendar.Store, month, week, day, form, confirm, gotoDate, detail, errorPopup tea.Model) Model {
+	model := Model{
+		store:      store,
+		month:      month,
+		week:       week,
+		day:        day,
+		form:       form,
+		confirm:    confirm,
+		gotoDate:   gotoDate,
+		detail:     detail,
+		errorPopup: errorPopup,
+		active:     "month",
 	}
+
+	if source, ok := store.(syncer); ok {
+		model.pendingSyncs = len(source.AccountNames())
+	}
+
+	return model
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	commands := []tea.Cmd{
 		m.month.Init(),
 		m.week.Init(),
 		m.day.Init(),
@@ -50,7 +65,26 @@ func (m Model) Init() tea.Cmd {
 		m.confirm.Init(),
 		m.gotoDate.Init(),
 		m.detail.Init(),
-	)
+		m.errorPopup.Init(),
+	}
+
+	return tea.Batch(append(commands, m.syncCommands()...)...)
+}
+
+func (m Model) syncCommands() []tea.Cmd {
+	source, ok := m.store.(syncer)
+	if !ok {
+		return nil
+	}
+
+	var commands []tea.Cmd
+	for _, name := range source.AccountNames() {
+		commands = append(commands, func() tea.Msg {
+			return msgs.SyncedMsg{Account: name, Err: source.Sync(name)}
+		})
+	}
+
+	return commands
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -62,6 +96,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.broadcast(tea.WindowSizeMsg{Width: msg.Width, Height: msg.Height - 1})
 
 	case tea.KeyMsg:
+		m.notice = ""
+
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
@@ -85,6 +121,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.gotoDate = gotoDate
 
 				return m, cmd
+
+			case "error":
+				errorPopup, cmd := m.errorPopup.Update(msg)
+				m.errorPopup = errorPopup
+
+				return m, cmd
 			}
 
 			return m, nil
@@ -106,6 +148,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			return m.switchView("day")
+
+		case "r":
+			commands := m.syncCommands()
+			m.pendingSyncs += len(commands)
+
+			return m, tea.Batch(commands...)
 
 		case "g":
 			date := time.Now()
@@ -131,6 +179,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case msgs.OpenEventFormMsg:
+		if !msg.IsNew {
+			if reason := m.readOnlyReason(msg.Event); reason != "" {
+				m.notice = reason
+
+				return m, nil
+			}
+		}
+
 		m.popup = "form"
 		form, cmd := m.form.Update(msg)
 		m.form = form
@@ -138,6 +194,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case msgs.RequestDeleteMsg:
+		if reason := m.readOnlyReason(msg.Event); reason != "" {
+			m.notice = reason
+
+			return m, nil
+		}
+
 		m.popup = "confirm"
 		confirm, cmd := m.confirm.Update(msg)
 		m.confirm = confirm
@@ -146,6 +208,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msgs.ClosePopupMsg:
 		m.popup = ""
+
+		if pending, ok := m.errorPopup.(interface{ Pending() int }); ok && pending.Pending() > 0 {
+			m.popup = "error"
+		}
 
 		return m, nil
 
@@ -162,19 +228,64 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msgs.EventFormSubmittedMsg:
 		m.popup = ""
-		if msg.IsNew {
-			m.store.Add(msg.Event)
-		} else {
-			m.store.Update(msg.Event)
-		}
+		store := m.store
 
-		return m.broadcast(msgs.EventsChangedMsg{})
+		return m, func() tea.Msg {
+			var err error
+			if msg.IsNew {
+				_, err = store.Add(msg.Event)
+			} else {
+				err = store.Update(msg.Event)
+			}
+
+			if err != nil {
+				return msgs.StoreErrorMsg{Err: err}
+			}
+
+			return msgs.EventsChangedMsg{}
+		}
 
 	case msgs.DeleteConfirmedMsg:
 		m.popup = ""
-		m.store.Delete(msg.Event.ID)
+		store := m.store
 
-		return m.broadcast(msgs.EventsChangedMsg{})
+		return m, func() tea.Msg {
+			if err := store.Delete(msg.Event.ID); err != nil {
+				return msgs.StoreErrorMsg{Err: err}
+			}
+
+			return msgs.EventsChangedMsg{}
+		}
+
+	case msgs.SyncedMsg:
+		if m.pendingSyncs > 0 {
+			m.pendingSyncs--
+		}
+
+		updated, syncedCmd := m.broadcast(msg)
+
+		if msg.Err != nil && (updated.popup == "" || updated.popup == "error") {
+			updated.popup = "error"
+		}
+
+		updated, eventsCmd := updated.broadcast(msgs.EventsChangedMsg{})
+
+		updated, calendarsCmd := updated.broadcast(msgs.CalendarsChangedMsg{
+			Calendars: calendar.WritableCalendars(updated.store),
+		})
+
+		return updated, tea.Batch(syncedCmd, eventsCmd, calendarsCmd)
+
+	case msgs.StoreErrorMsg:
+		updated, errorCmd := m.broadcast(msg)
+
+		if updated.popup == "" || updated.popup == "error" {
+			updated.popup = "error"
+		}
+
+		updated, eventsCmd := updated.broadcast(msgs.EventsChangedMsg{})
+
+		return updated, tea.Batch(errorCmd, eventsCmd)
 
 	case msgs.YankMsg:
 		yanked := msg.Event
@@ -208,15 +319,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		pasted := *m.clipboard
 		pasted.ID = ""
+		pasted.Recurring = false
 		pasted.Start = start
 		pasted.End = time.Date(
 			endDate.Year(), endDate.Month(), endDate.Day(),
 			m.clipboard.End.Hour(), m.clipboard.End.Minute(), 0, 0,
 			msg.Date.Location(),
 		)
-		m.store.Add(pasted)
 
-		return m.broadcast(msgs.EventsChangedMsg{})
+		store := m.store
+
+		return m, func() tea.Msg {
+			if _, err := store.Add(pasted); err != nil {
+				return msgs.StoreErrorMsg{Err: err}
+			}
+
+			return msgs.EventsChangedMsg{}
+		}
 	}
 
 	return m.broadcast(msg)
@@ -250,6 +369,8 @@ func (m Model) View() string {
 			popup = m.confirm.View()
 		case "goto":
 			popup = m.gotoDate.View()
+		case "error":
+			popup = m.errorPopup.View()
 		}
 
 		x := (m.width - lipgloss.Width(popup)) / 2
@@ -320,7 +441,21 @@ func (m Model) selectedEvent() *calendar.Event {
 	return selector.SelectedEvent()
 }
 
-func (m Model) broadcast(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) readOnlyReason(event calendar.Event) string {
+	if event.Recurring {
+		return "recurring events are read-only for now"
+	}
+
+	for _, writable := range calendar.WritableCalendars(m.store) {
+		if writable.Name == event.Calendar {
+			return ""
+		}
+	}
+
+	return "calendar " + event.Calendar + " is read-only"
+}
+
+func (m Model) broadcast(msg tea.Msg) (Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	update := func(widget tea.Model) tea.Model {
@@ -337,6 +472,7 @@ func (m Model) broadcast(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.confirm = update(m.confirm)
 	m.gotoDate = update(m.gotoDate)
 	m.detail = update(m.detail)
+	m.errorPopup = update(m.errorPopup)
 
 	return m, tea.Batch(cmds...)
 }

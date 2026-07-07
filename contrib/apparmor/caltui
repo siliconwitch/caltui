@@ -1,0 +1,39 @@
+# AppArmor profile for caltui.
+#
+# caltui touches exactly three directories, so confinement is short:
+#
+#   ~/.config/caltui/       publishable config, read-only
+#   ~/.local/state/caltui/  credentials, read-only
+#   ~/.cache/caltui/        event cache, read-write and safe to delete
+#
+# Install:
+#   sudo install -Dm644 contrib/apparmor/caltui /etc/apparmor.d/caltui
+#   sudo apparmor_parser -r /etc/apparmor.d/caltui
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile caltui /usr/local/bin/caltui {
+  include <abstractions/base>
+  include <abstractions/consoles>
+  include <abstractions/nameservice-strict>
+  include <abstractions/ssl_certs>
+
+  network inet stream,
+  network inet6 stream,
+
+  owner @{HOME}/.config/caltui/{,**} r,
+  owner @{HOME}/.local/state/caltui/{,**} r,
+  owner @{HOME}/.cache/caltui/{,**} rw,
+
+  /etc/localtime r,
+  /usr/share/zoneinfo/** r,
+  /sys/kernel/mm/transparent_hugepage/hpage_pmd_size r,
+
+  # Only needed when an account sets credential_command. Reading secrets from
+  # ~/.local/state/caltui/credentials.toml instead keeps the profile exec-free.
+  # /{usr/,}bin/{,d,b}ash mrix,
+  # /usr/bin/pass Ux,
+  # /usr/bin/secret-tool Ux,
+}

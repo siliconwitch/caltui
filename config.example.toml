@@ -2,6 +2,33 @@
 # IANA timezone name, e.g. "Europe/Stockholm". Defaults to the system timezone.
 timezone = ""
 
+# Accounts connect caltui to real calendars. With no accounts configured,
+# caltui shows sample events. Secrets NEVER live in this file: each account
+# either runs a credential_command (its output is the secret), or reads
+# ~/.local/state/caltui/credentials.toml (must be chmod 600), which contains
+# one [account-name] section per account with a single `secret` key.
+#
+# A caldav account's secret is the app password for basic auth. An ics
+# account's secret is the subscription URL itself when it is a secret one
+# (like Google's "Secret address in iCal format"); a public ics url can go
+# straight into `url` below and then needs no secret at all.
+#
+# To keep your email address and server out of this file as well, omit
+# `username` and `url` here and put them in the account's credentials.toml
+# section alongside `secret`.
+#
+# [[accounts]]
+# name = "fastmail"
+# type = "caldav"
+# url = "https://caldav.fastmail.com"
+# username = "raj@fastmail.com"
+# credential_command = "pass show caltui/fastmail"
+#
+# [[accounts]]
+# name = "google"
+# type = "ics"
+# credential_command = "pass show caltui/google-ics-url"
+
 [monthview]
 # Show ISO week numbers in a gutter on the left of the month grid.
 show_week_numbers = false

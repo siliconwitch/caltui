@@ -38,4 +38,13 @@ type GotoDateMsg struct{ Date time.Time }
 
 type EventsChangedMsg struct{}
 
+type SyncedMsg struct {
+	Account string
+	Err     error
+}
+
+type StoreErrorMsg struct{ Err error }
+
+type CalendarsChangedMsg struct{ Calendars []calendar.Calendar }
+
 type KeyHint struct{ Key, Action string }

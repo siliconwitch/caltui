@@ -126,6 +126,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, textinput.Blink
 
+	case msgs.CalendarsChangedMsg:
+		previous := ""
+		if m.calendarIndex < len(m.calendars) {
+			previous = m.calendars[m.calendarIndex].Name
+		}
+
+		m.calendars = msg.Calendars
+		m.calendarIndex = 0
+
+		for index, option := range m.calendars {
+			if option.Name == previous {
+				m.calendarIndex = index
+			}
+		}
+
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.pickerOpen {
 			picker, selected, closed := m.picker.Typed(msg.String())
@@ -168,6 +185,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.focusedSlot == startZoneSlot || m.focusedSlot == endZoneSlot {
 				return m.withOpenPicker(""), nil
+			}
+
+			if m.isNew && len(m.calendars) == 0 {
+				m.errorText = "No writable calendars"
+
+				return m, nil
 			}
 
 			calendarName := m.original.Calendar
@@ -464,6 +487,11 @@ func (m Model) View() string {
 		selected := m.calendars[m.calendarIndex]
 		calendarValue = selected.Name
 		bulletColor = lipgloss.Color(selected.Color)
+	}
+
+	if m.isNew && len(m.calendars) == 0 {
+		calendarValue = "none writable"
+		bulletColor = lipgloss.Color("")
 	}
 
 	calendarValue = lipgloss.NewStyle().Foreground(bulletColor).Render("●") + " " + calendarValue

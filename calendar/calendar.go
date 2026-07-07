@@ -12,6 +12,7 @@ type Event struct {
 	Attendees []string
 	Calendar  string
 	Color     string
+	Recurring bool
 }
 
 type Calendar struct {
@@ -26,7 +27,15 @@ type Source interface {
 
 type Store interface {
 	Source
-	Add(Event) Event
-	Update(Event)
-	Delete(id string)
+	Add(Event) (Event, error)
+	Update(Event) error
+	Delete(id string) error
+}
+
+func WritableCalendars(store Store) []Calendar {
+	if writable, ok := store.(interface{ WritableCalendars() []Calendar }); ok {
+		return writable.WritableCalendars()
+	}
+
+	return store.Calendars()
 }
