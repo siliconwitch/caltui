@@ -21,12 +21,13 @@ import (
 )
 
 type caldavObject struct {
-	path         string
-	uid          string
-	calendarName string
-	recurring    bool
-	etag         string
-	data         *ical.Calendar
+	path           string
+	uid            string
+	calendarName   string
+	recurring      bool
+	occurrenceTime time.Time
+	etag           string
+	data           *ical.Calendar
 }
 
 type caldavClient struct {
@@ -171,12 +172,13 @@ func (c *caldavClient) fetch(from, to time.Time) ([]Calendar, []Event, error) {
 
 			for _, parsed := range eventsFromICal(object.Data, name, from, to, c.location) {
 				objects[parsed.Event.ID] = caldavObject{
-					path:         object.Path,
-					uid:          parsed.UID,
-					calendarName: name,
-					recurring:    parsed.Event.Recurring,
-					etag:         etag,
-					data:         object.Data,
+					path:           object.Path,
+					uid:            parsed.UID,
+					calendarName:   name,
+					recurring:      parsed.Event.Recurring,
+					occurrenceTime: parsed.OccurrenceTime,
+					etag:           etag,
+					data:           object.Data,
 				}
 				events = append(events, parsed.Event)
 			}
@@ -364,6 +366,14 @@ func (c *caldavClient) downloadObject(ctx context.Context, objectPath string) (*
 // If-Match requires strong comparison, so weak W/ etags (Zoho) are sent
 // unconditionally rather than always failing the precondition.
 func (c *caldavClient) uploadObject(ctx context.Context, objectPath string, data *ical.Calendar, ifMatch string, refuseExisting bool) (string, string, error) {
+	// The encoder requires DTSTAMP on every VEVENT, but some servers omit it
+	// on events other clients created.
+	for _, child := range data.Children {
+		if child.Name == ical.CompEvent && child.Props.Get(ical.PropDateTimeStamp) == nil {
+			child.Props.SetDateTime(ical.PropDateTimeStamp, time.Now().UTC())
+		}
+	}
+
 	var body bytes.Buffer
 
 	if err := ical.NewEncoder(&body).Encode(data); err != nil {
@@ -575,20 +585,7 @@ func (c *caldavClient) update(event Event) error {
 		return nil
 	}
 
-	var target *ical.Component
-	for _, child := range object.data.Children {
-		if child.Name != ical.CompEvent {
-			continue
-		}
-
-		uid, _ := child.Props.Text(ical.PropUID)
-		if uid == object.uid {
-			target = child
-
-			break
-		}
-	}
-
+	target := masterChild(object.data, object.uid)
 	if target == nil {
 		return fmt.Errorf("event not found on the server: refresh and try again")
 	}
@@ -611,6 +608,218 @@ func (c *caldavClient) update(event Event) error {
 	return nil
 }
 
+func masterChild(data *ical.Calendar, uid string) *ical.Component {
+	for _, child := range data.Children {
+		if child.Name != ical.CompEvent {
+			continue
+		}
+
+		childUID, _ := child.Props.Text(ical.PropUID)
+
+		if childUID == uid && child.Props.Get(ical.PropRecurrenceID) == nil {
+			return child
+		}
+	}
+
+	return nil
+}
+
+func occurrenceProp(name string, master *ical.Component, occurrenceTime time.Time) *ical.Prop {
+	prop := ical.NewProp(name)
+
+	startProp := master.Props.Get(ical.PropDateTimeStart)
+
+	if startProp != nil && startProp.ValueType() == ical.ValueDate {
+		prop.SetDate(occurrenceTime)
+	} else {
+		prop.SetDateTime(occurrenceTime.UTC())
+	}
+
+	return prop
+}
+
+func (c *caldavClient) updateOccurrence(event Event) error {
+	object, ok := c.objects[event.ID]
+	if !ok {
+		return fmt.Errorf("event not found on the server: refresh and try again")
+	}
+
+	if event.Calendar != object.calendarName {
+		return fmt.Errorf("moving a single occurrence to another calendar is not supported yet")
+	}
+
+	master := masterChild(object.data, object.uid)
+	if master == nil {
+		return fmt.Errorf("event not found on the server: refresh and try again")
+	}
+
+	var override *ical.Component
+	for _, child := range object.data.Children {
+		if child.Name != ical.CompEvent || child.Props.Get(ical.PropRecurrenceID) == nil {
+			continue
+		}
+
+		childUID, _ := child.Props.Text(ical.PropUID)
+
+		recurrenceTime, err := child.Props.DateTime(ical.PropRecurrenceID, c.location)
+
+		if childUID == object.uid && err == nil && recurrenceTime.Unix() == object.occurrenceTime.Unix() {
+			override = child
+
+			break
+		}
+	}
+
+	if override == nil {
+		overrideEvent := ical.NewEvent()
+		overrideEvent.Props.SetText(ical.PropUID, object.uid)
+		overrideEvent.Props.Set(occurrenceProp(ical.PropRecurrenceID, master, object.occurrenceTime))
+
+		object.data.Children = append(object.data.Children, overrideEvent.Component)
+		override = overrideEvent.Component
+	}
+
+	applyEventProps(&ical.Event{Component: override}, event)
+
+	ctx, cancel := caldavContext()
+	defer cancel()
+
+	finalPath, etag, err := c.uploadObject(ctx, object.path, object.data, object.etag, false)
+
+	if err != nil {
+		return fmt.Errorf("updating occurrence: %w", err)
+	}
+
+	object.path = finalPath
+	object.etag = etag
+	c.objects[event.ID] = object
+
+	return nil
+}
+
+func (c *caldavClient) removeOccurrence(id string) error {
+	object, ok := c.objects[id]
+	if !ok {
+		return fmt.Errorf("event not found on the server: refresh and try again")
+	}
+
+	master := masterChild(object.data, object.uid)
+	if master == nil {
+		return fmt.Errorf("event not found on the server: refresh and try again")
+	}
+
+	master.Props.Add(occurrenceProp(ical.PropExceptionDates, master, object.occurrenceTime))
+
+	var children []*ical.Component
+	for _, child := range object.data.Children {
+		if child.Name == ical.CompEvent && child.Props.Get(ical.PropRecurrenceID) != nil {
+			childUID, _ := child.Props.Text(ical.PropUID)
+
+			recurrenceTime, err := child.Props.DateTime(ical.PropRecurrenceID, c.location)
+
+			if childUID == object.uid && err == nil && recurrenceTime.Unix() == object.occurrenceTime.Unix() {
+				continue
+			}
+		}
+
+		children = append(children, child)
+	}
+	object.data.Children = children
+
+	ctx, cancel := caldavContext()
+	defer cancel()
+
+	_, _, err := c.uploadObject(ctx, object.path, object.data, object.etag, false)
+
+	if err != nil {
+		return fmt.Errorf("deleting occurrence: %w", err)
+	}
+
+	delete(c.objects, id)
+
+	return nil
+}
+
+func (c *caldavClient) updateSeries(event Event) error {
+	object, ok := c.objects[event.ID]
+	if !ok {
+		return fmt.Errorf("event not found on the server: refresh and try again")
+	}
+
+	if event.Calendar != object.calendarName {
+		return fmt.Errorf("moving a repeating series to another calendar is not supported yet")
+	}
+
+	master := masterChild(object.data, object.uid)
+	if master == nil {
+		return fmt.Errorf("event not found on the server: refresh and try again")
+	}
+
+	masterEvent := ical.Event{Component: master}
+
+	masterStart, err := masterEvent.DateTimeStart(c.location)
+
+	if err != nil {
+		return fmt.Errorf("updating series: %w", err)
+	}
+
+	seriesEvent := event
+	seriesEvent.Start = masterStart
+	seriesEvent.End = masterStart.Add(event.End.Sub(event.Start))
+
+	if !event.AllDay {
+		seriesEvent.Start = time.Date(
+			masterStart.Year(), masterStart.Month(), masterStart.Day(),
+			event.Start.Hour(), event.Start.Minute(), 0, 0, event.Start.Location(),
+		)
+		seriesEvent.End = seriesEvent.Start.Add(event.End.Sub(event.Start))
+	}
+
+	if !seriesEvent.Start.Equal(masterStart) {
+		master.Props.Del(ical.PropExceptionDates)
+
+		var children []*ical.Component
+		for _, child := range object.data.Children {
+			if child.Name == ical.CompEvent && child.Props.Get(ical.PropRecurrenceID) != nil {
+				childUID, _ := child.Props.Text(ical.PropUID)
+
+				if childUID == object.uid {
+					continue
+				}
+			}
+
+			children = append(children, child)
+		}
+		object.data.Children = children
+	}
+
+	applyEventProps(&ical.Event{Component: master}, seriesEvent)
+
+	ctx, cancel := caldavContext()
+	defer cancel()
+
+	finalPath, etag, err := c.uploadObject(ctx, object.path, object.data, object.etag, false)
+
+	if err != nil {
+		return fmt.Errorf("updating series: %w", err)
+	}
+
+	object.path = finalPath
+	object.etag = etag
+	c.objects[event.ID] = object
+
+	return nil
+}
+
+func (c *caldavClient) removeSeries(id string) error {
+	object, ok := c.objects[id]
+	if !ok {
+		return fmt.Errorf("event not found on the server: refresh and try again")
+	}
+
+	return c.removeObject(object, id)
+}
+
 func (c *caldavClient) remove(id string) error {
 	object, ok := c.objects[id]
 	if !ok {
@@ -621,6 +830,10 @@ func (c *caldavClient) remove(id string) error {
 		return fmt.Errorf("recurring events are read-only for now")
 	}
 
+	return c.removeObject(object, id)
+}
+
+func (c *caldavClient) removeObject(object caldavObject, id string) error {
 	ctx, cancel := caldavContext()
 	defer cancel()
 
@@ -680,10 +893,49 @@ func applyEventProps(icalEvent *ical.Event, event Event) {
 		endProp := ical.NewProp(ical.PropDateTimeEnd)
 		endProp.SetDate(event.End)
 		icalEvent.Props.Set(endProp)
+	} else {
+		icalEvent.Props.SetDateTime(ical.PropDateTimeStart, event.Start.UTC())
+		icalEvent.Props.SetDateTime(ical.PropDateTimeEnd, event.End.UTC())
+	}
+
+	if icalEvent.Props.Get(ical.PropRecurrenceID) != nil {
+		return
+	}
+
+	existing := recurrenceSpec(icalEvent.Props)
+
+	sameFrequency := existing.Frequency == event.Recurrence.Frequency
+	sameInterval := max(existing.Interval, 1) == max(event.Recurrence.Interval, 1)
+	sameUntil := existing.Until.Equal(event.Recurrence.Until)
+
+	if sameFrequency && sameInterval && sameUntil {
+		return
+	}
+
+	if event.Recurrence.Frequency == "" {
+		icalEvent.Props.Del(ical.PropRecurrenceRule)
 
 		return
 	}
 
-	icalEvent.Props.SetDateTime(ical.PropDateTimeStart, event.Start.UTC())
-	icalEvent.Props.SetDateTime(ical.PropDateTimeEnd, event.End.UTC())
+	parts := []string{"FREQ=" + strings.ToUpper(event.Recurrence.Frequency)}
+
+	if event.Recurrence.Interval > 1 {
+		parts = append(parts, fmt.Sprintf("INTERVAL=%d", event.Recurrence.Interval))
+	}
+
+	if !event.Recurrence.Until.IsZero() {
+		// RFC 5545 requires a DATE-typed UNTIL when DTSTART is a DATE, which
+		// rrule-go cannot emit, hence the hand-built rule value.
+		until := event.Recurrence.Until.UTC().Format("20060102T150405Z")
+		if event.AllDay {
+			until = event.Recurrence.Until.Format("20060102")
+		}
+
+		parts = append(parts, "UNTIL="+until)
+	}
+
+	rule := ical.NewProp(ical.PropRecurrenceRule)
+	rule.Value = strings.Join(parts, ";")
+	icalEvent.Props.Set(rule)
 }

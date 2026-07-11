@@ -33,6 +33,13 @@ type writableClient interface {
 	remove(id string) error
 }
 
+type recurringClient interface {
+	updateOccurrence(Event) error
+	removeOccurrence(id string) error
+	updateSeries(Event) error
+	removeSeries(id string) error
+}
+
 type remoteAccount struct {
 	name         string
 	opMutex      sync.Mutex
@@ -316,6 +323,10 @@ func (r *Remote) Update(event Event) error {
 
 	target := r.accountForCalendar(event.Calendar)
 	if target != nil && target != account {
+		if event.Recurring {
+			return fmt.Errorf("moving a repeating event between accounts is not supported yet")
+		}
+
 		if _, err := r.Add(event); err != nil {
 			return err
 		}
@@ -362,6 +373,63 @@ func (r *Remote) Delete(id string) error {
 
 	if err := r.Sync(account.name, syncPostWrite); err != nil {
 		return fmt.Errorf("event deleted, but refreshing failed: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Remote) UpdateOccurrence(event Event) error {
+	return r.recurringWrite(event.ID, "event saved", func(recurring recurringClient, id string) error {
+		scoped := event
+		scoped.ID = id
+
+		return recurring.updateOccurrence(scoped)
+	})
+}
+
+func (r *Remote) UpdateSeries(event Event) error {
+	return r.recurringWrite(event.ID, "event saved", func(recurring recurringClient, id string) error {
+		scoped := event
+		scoped.ID = id
+
+		return recurring.updateSeries(scoped)
+	})
+}
+
+func (r *Remote) DeleteOccurrence(id string) error {
+	return r.recurringWrite(id, "event deleted", func(recurring recurringClient, strippedID string) error {
+		return recurring.removeOccurrence(strippedID)
+	})
+}
+
+func (r *Remote) DeleteSeries(id string) error {
+	return r.recurringWrite(id, "event deleted", func(recurring recurringClient, strippedID string) error {
+		return recurring.removeSeries(strippedID)
+	})
+}
+
+func (r *Remote) recurringWrite(eventID, successNoun string, operation func(recurringClient, string) error) error {
+	account, strippedID, err := r.accountForEvent(eventID)
+
+	if err != nil {
+		return err
+	}
+
+	recurring, ok := account.client.(recurringClient)
+	if !ok {
+		return fmt.Errorf("%s cannot edit repeating events", account.name)
+	}
+
+	account.opMutex.Lock()
+	err = operation(recurring, strippedID)
+	account.opMutex.Unlock()
+
+	if err != nil {
+		return err
+	}
+
+	if err := r.Sync(account.name, syncPostWrite); err != nil {
+		return fmt.Errorf("%s, but refreshing failed: %w", successNoun, err)
 	}
 
 	return nil

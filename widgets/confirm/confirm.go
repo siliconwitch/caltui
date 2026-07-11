@@ -38,10 +38,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		event := m.event
+
+		if m.event.Recurring {
+			switch msg.String() {
+			case "o":
+				return m, func() tea.Msg {
+					return msgs.DeleteConfirmedMsg{Event: event, Scope: msgs.ScopeOccurrence}
+				}
+
+			case "s":
+				return m, func() tea.Msg {
+					return msgs.DeleteConfirmedMsg{Event: event, Scope: msgs.ScopeSeries}
+				}
+
+			case "n", "esc":
+				return m, func() tea.Msg { return msgs.ClosePopupMsg{} }
+			}
+
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "y", "enter":
-			event := m.event
-
 			return m, func() tea.Msg { return msgs.DeleteConfirmedMsg{Event: event} }
 
 		case "n", "esc":
@@ -58,7 +77,12 @@ func (m Model) View() string {
 		textLimit = min(50, max(16, m.width-8))
 	}
 
-	heading := lipgloss.NewStyle().Bold(true).Render("Delete event?")
+	headingText := "Delete event?"
+	if m.event.Recurring {
+		headingText = "Delete repeating event?"
+	}
+
+	heading := lipgloss.NewStyle().Bold(true).Render(headingText)
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color(m.event.Color)).Render(m.event.Title)
 
 	endInclusive := m.event.End.AddDate(0, 0, -1)
@@ -95,6 +119,14 @@ func (m Model) View() string {
 }
 
 func (m Model) KeyHints() []msgs.KeyHint {
+	if m.event.Recurring {
+		return []msgs.KeyHint{
+			{Key: "o", Action: "this occurrence"},
+			{Key: "s", Action: "whole series"},
+			{Key: "n", Action: "cancel"},
+		}
+	}
+
 	return []msgs.KeyHint{
 		{Key: "y", Action: "delete"},
 		{Key: "n", Action: "cancel"},

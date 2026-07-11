@@ -18,6 +18,10 @@ const caldavTestICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//t
 
 const caldavHollowICS = "BEGIN:VCALENDAR&#13;\nEND:VCALENDAR&#13;\n"
 
+const caldavRecurringICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
+	"BEGIN:VEVENT&#13;\nUID:standup-1&#13;\nDTSTART:20260707T090000Z&#13;\nDTEND:20260707T093000Z&#13;\n" +
+	"SUMMARY:Standup&#13;\nRRULE:FREQ=DAILY&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
+
 type caldavServerOptions struct {
 	wellKnownWorks bool
 	queryMode      string
@@ -117,6 +121,9 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 
 			case opts.queryMode == "icloud", opts.queryMode == "inline":
 				multistatus(w, eventReport(requestPath+"offsite-1.ics", caldavTestICS))
+
+			case opts.queryMode == "recurring":
+				multistatus(w, eventReport(requestPath+"standup-1.ics", caldavRecurringICS))
 
 			case opts.queryMode == "hollow":
 				multistatus(w, eventReport(requestPath+"offsite-1.ics", caldavHollowICS))
@@ -662,6 +669,261 @@ func TestCaldavMoveRollsBackOnFailedDelete(t *testing.T) {
 
 			if len(deleteHeaders) != c.wantDeletes {
 				t.Errorf("want %d delete requests, got %d", c.wantDeletes, len(deleteHeaders))
+			}
+		})
+	}
+}
+
+func TestCaldavRecurringWrites(t *testing.T) {
+	julyEighth := time.Date(2026, 7, 8, 9, 0, 0, 0, time.UTC)
+
+	instanceID := fmt.Sprintf("standup-1@%d", julyEighth.Unix())
+
+	occurrenceEvent := Event{
+		ID:        instanceID,
+		Title:     "Standup",
+		Calendar:  "Work",
+		Start:     julyEighth,
+		End:       julyEighth.Add(30 * time.Minute),
+		Recurring: true,
+		Recurrence: Recurrence{Frequency: "daily", Interval: 1},
+	}
+
+	recurringClientFor := func(t *testing.T, putBodies *[]string, deleteHeaders *[]http.Header) (*caldavClient, func()) {
+		t.Helper()
+
+		server := caldavTestServer(t, caldavServerOptions{
+			wellKnownWorks: true,
+			queryMode:      "recurring",
+			putBodies:      putBodies,
+			deleteHeaders:  deleteHeaders,
+		})
+
+		account := Account{
+			Name:     "work",
+			Type:     "caldav",
+			URL:      server.URL,
+			Username: "raj@example.com",
+		}
+
+		client, err := newCaldavClient(account, "app-password", time.UTC)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+
+		to := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+		_, events, err := client.fetch(from, to)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(events) < 10 {
+			t.Fatalf("want expanded daily instances, got %d", len(events))
+		}
+
+		return client, server.Close
+	}
+
+	t.Run("delete one occurrence writes an exdate", func(t *testing.T) {
+		var putBodies []string
+
+		client, close := recurringClientFor(t, &putBodies, nil)
+		defer close()
+
+		if err := client.removeOccurrence(instanceID); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(putBodies) != 1 || !strings.Contains(putBodies[0], "EXDATE:20260708T090000Z") {
+			t.Fatalf("want an EXDATE for the occurrence, got %q", putBodies)
+		}
+
+		if _, ok := client.objects[instanceID]; ok {
+			t.Fatal("want the occurrence dropped from the object map")
+		}
+	})
+
+	t.Run("edit one occurrence appends an override", func(t *testing.T) {
+		var putBodies []string
+
+		client, close := recurringClientFor(t, &putBodies, nil)
+		defer close()
+
+		moved := occurrenceEvent
+		moved.Title = "Moved standup"
+		moved.Start = julyEighth.Add(2 * time.Hour)
+		moved.End = moved.Start.Add(30 * time.Minute)
+
+		if err := client.updateOccurrence(moved); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(putBodies) != 1 {
+			t.Fatalf("want one upload, got %d", len(putBodies))
+		}
+
+		for _, wanted := range []string{"RECURRENCE-ID:20260708T090000Z", "SUMMARY:Moved standup", "DTSTART:20260708T110000Z", "RRULE:FREQ=DAILY"} {
+			if !strings.Contains(putBodies[0], wanted) {
+				t.Errorf("want uploaded object to contain %q, got %q", wanted, putBodies[0])
+			}
+		}
+
+		if strings.Count(putBodies[0], "RRULE") != 1 {
+			t.Errorf("want the override to carry no RRULE of its own, got %q", putBodies[0])
+		}
+	})
+
+	t.Run("series edit keeps an untouched rule and master date", func(t *testing.T) {
+		var putBodies []string
+
+		client, close := recurringClientFor(t, &putBodies, nil)
+		defer close()
+
+		renamed := occurrenceEvent
+		renamed.Title = "Renamed standup"
+
+		if err := client.updateSeries(renamed); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, wanted := range []string{"SUMMARY:Renamed standup", "RRULE:FREQ=DAILY", "DTSTART:20260707T090000Z"} {
+			if !strings.Contains(putBodies[0], wanted) {
+				t.Errorf("want uploaded master to contain %q, got %q", wanted, putBodies[0])
+			}
+		}
+	})
+
+	t.Run("series time edit shifts the master but not its date", func(t *testing.T) {
+		var putBodies []string
+
+		client, close := recurringClientFor(t, &putBodies, nil)
+		defer close()
+
+		shifted := occurrenceEvent
+		shifted.Start = julyEighth.Add(5 * time.Hour)
+		shifted.End = shifted.Start.Add(time.Hour)
+
+		if err := client.updateSeries(shifted); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, wanted := range []string{"DTSTART:20260707T140000Z", "DTEND:20260707T150000Z"} {
+			if !strings.Contains(putBodies[0], wanted) {
+				t.Errorf("want master shifted to the new time on its own date, got %q", putBodies[0])
+			}
+		}
+	})
+
+	t.Run("series delete removes the object", func(t *testing.T) {
+		var deleteHeaders []http.Header
+
+		client, close := recurringClientFor(t, nil, &deleteHeaders)
+		defer close()
+
+		if err := client.removeSeries(instanceID); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(deleteHeaders) != 1 {
+			t.Fatalf("want one delete request, got %d", len(deleteHeaders))
+		}
+	})
+
+	t.Run("plain update and remove still refuse recurring events", func(t *testing.T) {
+		client, close := recurringClientFor(t, nil, nil)
+		defer close()
+
+		if err := client.update(occurrenceEvent); err == nil || !strings.Contains(err.Error(), "read-only") {
+			t.Fatalf("want the plain update guard, got %v", err)
+		}
+
+		if err := client.remove(instanceID); err == nil || !strings.Contains(err.Error(), "read-only") {
+			t.Fatalf("want the plain remove guard, got %v", err)
+		}
+	})
+}
+
+func TestCaldavCreateRecurringEvent(t *testing.T) {
+	cases := []struct {
+		name      string
+		event     Event
+		wantRule  string
+	}{
+		{
+			name: "timed weekly with until",
+			event: Event{
+				Title:    "Climbing",
+				Calendar: "Work",
+				Start:    time.Date(2026, 7, 8, 18, 0, 0, 0, time.UTC),
+				End:      time.Date(2026, 7, 8, 20, 0, 0, 0, time.UTC),
+				Recurrence: Recurrence{
+					Frequency: "weekly",
+					Interval:  2,
+					Until:     time.Date(2026, 9, 1, 23, 59, 59, 0, time.UTC),
+				},
+			},
+			wantRule: "RRULE:FREQ=WEEKLY;INTERVAL=2;UNTIL=20260901T235959Z",
+		},
+		{
+			name: "all day yearly with date typed until",
+			event: Event{
+				Title:    "Anniversary",
+				Calendar: "Work",
+				AllDay:   true,
+				Start:    time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC),
+				End:      time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC),
+				Recurrence: Recurrence{
+					Frequency: "yearly",
+					Until:     time.Date(2030, 7, 8, 0, 0, 0, 0, time.UTC),
+				},
+			},
+			wantRule: "RRULE:FREQ=YEARLY;UNTIL=20300708",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var putBodies []string
+
+			server := caldavTestServer(t, caldavServerOptions{
+				wellKnownWorks: true,
+				queryMode:      "inline",
+				putBodies:      &putBodies,
+			})
+			defer server.Close()
+
+			account := Account{
+				Name:     "work",
+				Type:     "caldav",
+				URL:      server.URL,
+				Username: "raj@example.com",
+			}
+
+			client, err := newCaldavClient(account, "app-password", time.UTC)
+
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+			to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+
+			if _, _, err := client.fetch(from, to); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := client.create(c.event); err != nil {
+				t.Fatal(err)
+			}
+
+			if len(putBodies) != 1 || !strings.Contains(putBodies[0], c.wantRule) {
+				t.Fatalf("want uploaded event to contain %q, got %q", c.wantRule, putBodies)
 			}
 		})
 	}

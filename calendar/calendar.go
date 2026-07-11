@@ -14,6 +14,13 @@ type Event struct {
 	Calendar    string
 	Color       string
 	Recurring   bool
+	Recurrence  Recurrence
+}
+
+type Recurrence struct {
+	Frequency string
+	Interval  int
+	Until     time.Time
 }
 
 type Calendar struct {

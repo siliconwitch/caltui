@@ -153,9 +153,16 @@ reports none, the cached copy is kept and an error explains; only a manual
 refresh accepts the empty result. Events within one year either side of today are
 synced. Sync and save problems open an error popup — `y` yanks the error text to
 the clipboard (via OSC 52, so it works over SSH too), any other key
-dismisses it, and further queued errors follow one at a time. Editing and deleting
-recurring events is not supported yet; those events, and everything in an
-`ics` subscription, are read-only.
+dismisses it, and further queued errors follow one at a time.
+
+Repeating events are fully editable: the form's *Repeat* field creates daily,
+weekly, monthly or yearly series (with an interval and an optional end date),
+and editing or deleting an existing occurrence asks whether the change covers
+just that occurrence or the whole series. Editing a whole series from one of
+its occurrences changes the time of day, never the series' start date, and a
+series keeps rule details caltui cannot express (such as by-day rules created
+elsewhere) as long as its repeat fields are left untouched. Everything in an
+`ics` subscription remains read-only.
 
 ## Security
 

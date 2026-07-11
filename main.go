@@ -18,6 +18,7 @@ import (
 	"github.com/siliconwitch/caltui/widgets/eventform"
 	"github.com/siliconwitch/caltui/widgets/gotodate"
 	"github.com/siliconwitch/caltui/widgets/monthview"
+	"github.com/siliconwitch/caltui/widgets/scopepicker"
 	"github.com/siliconwitch/caltui/widgets/weekview"
 )
 
@@ -78,6 +79,7 @@ func main() {
 		gotodate.New(),
 		detail.New(location),
 		errorpopup.New(),
+		scopepicker.New(),
 	)
 
 	program := tea.NewProgram(root, tea.WithAltScreen())

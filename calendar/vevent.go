@@ -6,11 +6,38 @@ import (
 	"time"
 
 	"github.com/emersion/go-ical"
+	"github.com/teambition/rrule-go"
 )
 
 type parsedEvent struct {
 	Event
-	UID string
+	UID            string
+	OccurrenceTime time.Time
+}
+
+func recurrenceSpec(props ical.Props) Recurrence {
+	roption, err := props.RecurrenceRule()
+
+	if err != nil || roption == nil {
+		return Recurrence{}
+	}
+
+	spec := Recurrence{Interval: roption.Interval, Until: roption.Until}
+
+	switch roption.Freq {
+	case rrule.DAILY:
+		spec.Frequency = "daily"
+	case rrule.WEEKLY:
+		spec.Frequency = "weekly"
+	case rrule.MONTHLY:
+		spec.Frequency = "monthly"
+	case rrule.YEARLY:
+		spec.Frequency = "yearly"
+	default:
+		return Recurrence{}
+	}
+
+	return spec
 }
 
 func eventsFromICal(data *ical.Calendar, calendarName string, from, to time.Time, location *time.Location) []parsedEvent {
@@ -45,7 +72,7 @@ func eventsFromICal(data *ical.Calendar, calendarName string, from, to time.Time
 
 	var events []parsedEvent
 
-	emitOverride := func(uid string, override *ical.Event) {
+	emitOverride := func(uid string, override *ical.Event, spec Recurrence) {
 		event, ok := singleEvent(*override, calendarName, location)
 		if !ok || !event.End.After(from) || !event.Start.Before(to) {
 			return
@@ -59,7 +86,8 @@ func eventsFromICal(data *ical.Calendar, calendarName string, from, to time.Time
 
 		event.ID = fmt.Sprintf("%s@%d", uid, recurrenceTime.Unix())
 		event.Recurring = true
-		events = append(events, parsedEvent{Event: event, UID: uid})
+		event.Recurrence = spec
+		events = append(events, parsedEvent{Event: event, UID: uid, OccurrenceTime: recurrenceTime})
 	}
 
 	for _, uid := range order {
@@ -67,7 +95,7 @@ func eventsFromICal(data *ical.Calendar, calendarName string, from, to time.Time
 
 		if group.master == nil {
 			for _, override := range group.overrides {
-				emitOverride(uid, override)
+				emitOverride(uid, override, Recurrence{})
 			}
 
 			continue
@@ -93,6 +121,8 @@ func eventsFromICal(data *ical.Calendar, calendarName string, from, to time.Time
 			continue
 		}
 
+		spec := recurrenceSpec(group.master.Props)
+
 		overridesByTime := map[int64]*ical.Event{}
 		for _, override := range group.overrides {
 			recurrenceTime, err := override.Props.DateTime(ical.PropRecurrenceID, location)
@@ -110,7 +140,7 @@ func eventsFromICal(data *ical.Calendar, calendarName string, from, to time.Time
 		for _, occurrence := range set.Between(from.Add(-duration), to, true) {
 			if override, ok := overridesByTime[occurrence.Unix()]; ok {
 				consumed[occurrence.Unix()] = true
-				emitOverride(uid, override)
+				emitOverride(uid, override, spec)
 
 				continue
 			}
@@ -120,7 +150,8 @@ func eventsFromICal(data *ical.Calendar, calendarName string, from, to time.Time
 			occurrenceEvent.Start = occurrence
 			occurrenceEvent.End = occurrence.Add(duration)
 			occurrenceEvent.Recurring = true
-			events = append(events, parsedEvent{Event: occurrenceEvent, UID: uid})
+			occurrenceEvent.Recurrence = spec
+			events = append(events, parsedEvent{Event: occurrenceEvent, UID: uid, OccurrenceTime: occurrence})
 		}
 
 		for _, override := range group.overrides {
@@ -130,7 +161,7 @@ func eventsFromICal(data *ical.Calendar, calendarName string, from, to time.Time
 				continue
 			}
 
-			emitOverride(uid, override)
+			emitOverride(uid, override, spec)
 		}
 	}
 

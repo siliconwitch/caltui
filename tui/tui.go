@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ type Model struct {
 	gotoDate     tea.Model
 	detail       tea.Model
 	errorPopup   tea.Model
+	scopePicker  tea.Model
 	active       string
 	popup        string
 	clipboard    *calendar.Event
@@ -39,7 +41,7 @@ type Model struct {
 	lastSync     time.Time
 }
 
-func New(store calendar.Store, syncInterval time.Duration, month, week, day, form, confirm, gotoDate, detail, errorPopup tea.Model) Model {
+func New(store calendar.Store, syncInterval time.Duration, month, week, day, form, confirm, gotoDate, detail, errorPopup, scopePicker tea.Model) Model {
 	model := Model{
 		store:        store,
 		month:        month,
@@ -50,6 +52,7 @@ func New(store calendar.Store, syncInterval time.Duration, month, week, day, for
 		gotoDate:     gotoDate,
 		detail:       detail,
 		errorPopup:   errorPopup,
+		scopePicker:  scopePicker,
 		active:       "month",
 		syncInterval: syncInterval,
 		lastSync:     time.Now(),
@@ -72,6 +75,7 @@ func (m Model) Init() tea.Cmd {
 		m.gotoDate.Init(),
 		m.detail.Init(),
 		m.errorPopup.Init(),
+		m.scopePicker.Init(),
 	}
 
 	commands = append(commands, m.syncCommands(calendar.SyncAutomatic)...)
@@ -133,6 +137,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "goto":
 				gotoDate, cmd := m.gotoDate.Update(msg)
 				m.gotoDate = gotoDate
+
+				return m, cmd
+
+			case "scope":
+				scopePicker, cmd := m.scopePicker.Update(msg)
+				m.scopePicker = scopePicker
 
 				return m, cmd
 
@@ -206,6 +216,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		if !msg.IsNew && msg.Event.Recurring && msg.Scope == msgs.ScopeUnset {
+			m.popup = "scope"
+			scopePicker, cmd := m.scopePicker.Update(msg)
+			m.scopePicker = scopePicker
+
+			return m, cmd
+		}
+
 		m.popup = "form"
 		form, cmd := m.form.Update(msg)
 		m.form = form
@@ -251,9 +269,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, func() tea.Msg {
 			var err error
-			if msg.IsNew {
+
+			switch {
+			case msg.IsNew:
 				_, err = store.Add(msg.Event)
-			} else {
+
+			case msg.Scope == msgs.ScopeOccurrence:
+				occurrenceStore, ok := store.(interface{ UpdateOccurrence(calendar.Event) error })
+				if !ok {
+					err = fmt.Errorf("this account cannot edit repeating events")
+				} else {
+					err = occurrenceStore.UpdateOccurrence(msg.Event)
+				}
+
+			case msg.Scope == msgs.ScopeSeries:
+				seriesStore, ok := store.(interface{ UpdateSeries(calendar.Event) error })
+				if !ok {
+					err = fmt.Errorf("this account cannot edit repeating events")
+				} else {
+					err = seriesStore.UpdateSeries(msg.Event)
+				}
+
+			default:
 				err = store.Update(msg.Event)
 			}
 
@@ -269,7 +306,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		store := m.store
 
 		return m, func() tea.Msg {
-			if err := store.Delete(msg.Event.ID); err != nil {
+			var err error
+
+			switch {
+			case msg.Scope == msgs.ScopeOccurrence:
+				occurrenceStore, ok := store.(interface{ DeleteOccurrence(string) error })
+				if !ok {
+					err = fmt.Errorf("this account cannot edit repeating events")
+				} else {
+					err = occurrenceStore.DeleteOccurrence(msg.Event.ID)
+				}
+
+			case msg.Scope == msgs.ScopeSeries:
+				seriesStore, ok := store.(interface{ DeleteSeries(string) error })
+				if !ok {
+					err = fmt.Errorf("this account cannot edit repeating events")
+				} else {
+					err = seriesStore.DeleteSeries(msg.Event.ID)
+				}
+
+			default:
+				err = store.Delete(msg.Event.ID)
+			}
+
+			if err != nil {
 				return msgs.StoreErrorMsg{Err: err}
 			}
 
@@ -357,6 +417,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		pasted := *m.clipboard
 		pasted.ID = ""
 		pasted.Recurring = false
+		pasted.Recurrence = calendar.Recurrence{}
 		pasted.Start = start
 		pasted.End = time.Date(
 			endDate.Year(), endDate.Month(), endDate.Day(),
@@ -406,6 +467,8 @@ func (m Model) View() string {
 			popup = m.confirm.View()
 		case "goto":
 			popup = m.gotoDate.View()
+		case "scope":
+			popup = m.scopePicker.View()
 		case "error":
 			popup = m.errorPopup.View()
 		}
@@ -479,10 +542,6 @@ func (m Model) selectedEvent() *calendar.Event {
 }
 
 func (m Model) readOnlyReason(event calendar.Event) string {
-	if event.Recurring {
-		return "recurring events are read-only for now"
-	}
-
 	for _, writable := range calendar.WritableCalendars(m.store) {
 		if writable.Name == event.Calendar {
 			return ""
@@ -510,6 +569,7 @@ func (m Model) broadcast(msg tea.Msg) (Model, tea.Cmd) {
 	m.gotoDate = update(m.gotoDate)
 	m.detail = update(m.detail)
 	m.errorPopup = update(m.errorPopup)
+	m.scopePicker = update(m.scopePicker)
 
 	return m, tea.Batch(cmds...)
 }

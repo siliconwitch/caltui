@@ -143,6 +143,7 @@ func TestComposedEvent(t *testing.T) {
 			event, problem := composedEvent(
 				calendar.Event{},
 				"Test event", "Test location", "Test notes",
+				calendar.Recurrence{},
 				testCase.allDay,
 				testCase.startDate, testCase.startTime, testCase.endDate, testCase.endTime,
 				startZone, endZone, time.Local,

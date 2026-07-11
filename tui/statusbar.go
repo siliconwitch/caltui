@@ -19,6 +19,8 @@ func (m Model) statusBar() string {
 		source = m.confirm
 	case "goto":
 		source = m.gotoDate
+	case "scope":
+		source = m.scopePicker
 	case "error":
 		source = m.errorPopup
 	}

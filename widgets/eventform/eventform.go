@@ -29,8 +29,18 @@ const (
 	endDateSlot
 	endTimeSlot
 	endZoneSlot
+	repeatSlot
+	intervalSlot
+	endsSlot
+	untilDateSlot
 	calendarSlot
 )
+
+var frequencies = []string{"", "daily", "weekly", "monthly", "yearly"}
+
+var frequencyLabels = []string{"never", "daily", "weekly", "monthly", "yearly"}
+
+var intervalUnits = []string{"", "day", "week", "month", "year"}
 
 const (
 	maxInnerWidth = 46
@@ -53,13 +63,18 @@ type Model struct {
 	picker        timezone.Picker
 	pickerOpen    bool
 	pickerTarget  int
-	allDay        bool
-	calendarIndex int
-	focusedSlot   int
-	original      calendar.Event
-	isNew         bool
-	errorText     string
-	innerWidth    int
+	allDay         bool
+	calendarIndex  int
+	focusedSlot    int
+	frequencyIndex int
+	interval       int
+	endsOnDate     bool
+	untilDate      maskinput.Field
+	scope          msgs.EditScope
+	original       calendar.Event
+	isNew          bool
+	errorText      string
+	innerWidth     int
 }
 
 func New(calendars []calendar.Calendar, location *time.Location) Model {
@@ -75,6 +90,7 @@ func New(calendars []calendar.Calendar, location *time.Location) Model {
 		endTime:       maskinput.NewTime(),
 		startZone:     location,
 		endZone:       location,
+		untilDate:     maskinput.NewDate(false),
 		picker:        timezone.NewPicker(),
 		innerWidth:    maxInnerWidth,
 	}
@@ -105,10 +121,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case msgs.OpenEventFormMsg:
 		m.original = msg.Event
 		m.isNew = msg.IsNew
+		m.scope = msg.Scope
 		m.errorText = ""
 		m.allDay = msg.Event.AllDay
 		m.pickerOpen = false
 		m.calendarIndex = 0
+
+		m.frequencyIndex = max(0, slices.Index(frequencies, msg.Event.Recurrence.Frequency))
+		m.interval = max(1, msg.Event.Recurrence.Interval)
+		m.endsOnDate = !msg.Event.Recurrence.Until.IsZero()
+
+		untilSeed := msg.Event.Start
+		if m.endsOnDate {
+			untilSeed = msg.Event.Recurrence.Until
+		}
+		m.untilDate = m.untilDate.WithDate(untilSeed)
 
 		for index, option := range m.calendars {
 			if option.Name == msg.Event.Calendar {
@@ -222,6 +249,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				strings.TrimSpace(m.titleInput.Value()),
 				strings.TrimSpace(m.locationInput.Value()),
 				description,
+				m.composedRecurrence(),
 				m.allDay,
 				m.startDate, m.startTime, m.endDate, m.endTime,
 				m.startZone, m.endZone, m.location,
@@ -236,9 +264,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.errorText = ""
 			isNew := m.isNew
+			scope := m.scope
 
 			return m, func() tea.Msg {
-				return msgs.EventFormSubmittedMsg{Event: submitted, IsNew: isNew}
+				return msgs.EventFormSubmittedMsg{Event: submitted, IsNew: isNew, Scope: scope}
 			}
 		}
 
@@ -265,6 +294,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			return m, nil
 
+		case repeatSlot:
+			switch msg.String() {
+			case "left":
+				m.frequencyIndex = (m.frequencyIndex + len(frequencies) - 1) % len(frequencies)
+			case "right", " ":
+				m.frequencyIndex = (m.frequencyIndex + 1) % len(frequencies)
+			}
+
+			return m, nil
+
+		case intervalSlot:
+			switch msg.String() {
+			case "left":
+				m.interval = max(1, m.interval-1)
+			case "right", " ":
+				m.interval = min(99, m.interval+1)
+			}
+
+			return m, nil
+
+		case endsSlot:
+			switch msg.String() {
+			case "left", "right", " ":
+				m.endsOnDate = !m.endsOnDate
+			}
+
+			return m, nil
+
 		case startZoneSlot, endZoneSlot:
 			key := msg.String()
 
@@ -283,7 +340,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			return m.withOpenPicker(key), nil
 
-		case startDateSlot, startTimeSlot, endDateSlot, endTimeSlot:
+		case startDateSlot, startTimeSlot, endDateSlot, endTimeSlot, untilDateSlot:
 			completed := false
 
 			switch m.focusedSlot {
@@ -295,6 +352,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.endDate, completed = m.endDate.Typed(msg.String())
 			case endTimeSlot:
 				m.endTime, completed = m.endTime.Typed(msg.String())
+			case untilDateSlot:
+				m.untilDate, _ = m.untilDate.Typed(msg.String())
 			}
 
 			if completed {
@@ -337,16 +396,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) slotOrder() []int {
-	if m.allDay {
-		return []int{titleSlot, locationSlot, notesSlot, allDaySlot, startDateSlot, endDateSlot, calendarSlot}
+	order := []int{titleSlot, locationSlot, notesSlot, allDaySlot, startDateSlot, endDateSlot}
+	if !m.allDay {
+		order = []int{
+			titleSlot, locationSlot, notesSlot, allDaySlot,
+			startDateSlot, startTimeSlot, startZoneSlot,
+			endDateSlot, endTimeSlot, endZoneSlot,
+		}
 	}
 
-	return []int{
-		titleSlot, locationSlot, notesSlot, allDaySlot,
-		startDateSlot, startTimeSlot, startZoneSlot,
-		endDateSlot, endTimeSlot, endZoneSlot,
-		calendarSlot,
+	if m.scope != msgs.ScopeOccurrence {
+		order = append(order, repeatSlot)
+
+		if m.frequencyIndex > 0 {
+			order = append(order, intervalSlot, endsSlot)
+
+			if m.endsOnDate {
+				order = append(order, untilDateSlot)
+			}
+		}
 	}
+
+	return append(order, calendarSlot)
 }
 
 func (m Model) withShiftedFocus(step int) Model {
@@ -397,6 +468,7 @@ func (m Model) withFocusedSlot(slot int) Model {
 	m.startTime = m.startTime.Blur()
 	m.endDate = m.endDate.Blur()
 	m.endTime = m.endTime.Blur()
+	m.untilDate = m.untilDate.Blur()
 
 	switch slot {
 	case titleSlot:
@@ -413,6 +485,8 @@ func (m Model) withFocusedSlot(slot int) Model {
 		m.endDate = m.endDate.Focus()
 	case endTimeSlot:
 		m.endTime = m.endTime.Focus()
+	case untilDateSlot:
+		m.untilDate = m.untilDate.Focus()
 	}
 
 	return m
@@ -437,9 +511,55 @@ func (m Model) withOpenPicker(query string) Model {
 	return m
 }
 
+func (m Model) composedRecurrence() calendar.Recurrence {
+	if m.scope == msgs.ScopeOccurrence {
+		return m.original.Recurrence
+	}
+
+	if m.frequencyIndex == 0 {
+		return calendar.Recurrence{}
+	}
+
+	recurrence := calendar.Recurrence{
+		Frequency: frequencies[m.frequencyIndex],
+		Interval:  m.interval,
+	}
+
+	if m.endsOnDate {
+		year, month, day := m.untilDate.Date()
+
+		recurrence.Until = time.Date(year, month, day, 23, 59, 59, 0, m.startZone)
+		if m.allDay {
+			recurrence.Until = time.Date(year, month, day, 0, 0, 0, 0, m.location)
+		}
+	}
+
+	original := m.original.Recurrence
+
+	sameEnding := original.Until.IsZero() == recurrence.Until.IsZero()
+	if !recurrence.Until.IsZero() && !original.Until.IsZero() {
+		originalYear, originalMonth, originalDay := original.Until.Date()
+
+		untilYear, untilMonth, untilDay := recurrence.Until.Date()
+
+		sameEnding = originalYear == untilYear && originalMonth == untilMonth && originalDay == untilDay
+	}
+
+	untouched := recurrence.Frequency == original.Frequency &&
+		max(recurrence.Interval, 1) == max(original.Interval, 1) &&
+		sameEnding
+
+	if untouched {
+		return original
+	}
+
+	return recurrence
+}
+
 func composedEvent(
 	original calendar.Event,
 	title, location, description string,
+	recurrence calendar.Recurrence,
 	allDay bool,
 	startDate, startTime, endDate, endTime maskinput.Field,
 	startZone, endZone, defaultLocation *time.Location,
@@ -453,9 +573,14 @@ func composedEvent(
 	event.Title = title
 	event.Location = location
 	event.Description = description
+	event.Recurrence = recurrence
 	event.AllDay = allDay
 	event.Calendar = calendarName
 	event.Color = ""
+
+	if !recurrence.Until.IsZero() && recurrence.Until.Before(time.Date(startYear, startMonth, startDay, 0, 0, 0, 0, defaultLocation)) {
+		return event, "Repeat until must not be before start"
+	}
 
 	if allDay {
 		event.Start = time.Date(startYear, startMonth, startDay, 0, 0, 0, 0, defaultLocation)
@@ -546,19 +671,51 @@ func (m Model) View() string {
 		calendarValue = chevronStyle.Render("‹ ") + calendarValue + chevronStyle.Render(" ›")
 	}
 
-	rows := []struct {
+	cycler := func(slot int, value string) string {
+		if m.focusedSlot == slot {
+			return chevronStyle.Render("‹ ") + value + chevronStyle.Render(" ›")
+		}
+
+		return value
+	}
+
+	type formRow struct {
 		label string
 		slots []int
 		value string
-	}{
+	}
+
+	rows := []formRow{
 		{"Title", []int{titleSlot}, m.titleInput.View()},
 		{"Location", []int{locationSlot}, m.locationInput.View()},
 		{"Notes", []int{notesSlot}, m.notesInput.View()},
 		{"All day", []int{allDaySlot}, allDayValue},
 		{"Start", []int{startDateSlot, startTimeSlot, startZoneSlot}, startValue},
 		{"End", []int{endDateSlot, endTimeSlot, endZoneSlot}, endValue},
-		{"Calendar", []int{calendarSlot}, calendarValue},
 	}
+
+	if m.scope != msgs.ScopeOccurrence {
+		rows = append(rows, formRow{"Repeat", []int{repeatSlot}, cycler(repeatSlot, frequencyLabels[m.frequencyIndex])})
+
+		if m.frequencyIndex > 0 {
+			everyValue := "every " + intervalUnits[m.frequencyIndex]
+			if m.interval > 1 {
+				everyValue = fmt.Sprintf("every %d %ss", m.interval, intervalUnits[m.frequencyIndex])
+			}
+
+			untilValue := cycler(endsSlot, "never")
+			if m.endsOnDate {
+				untilValue = cycler(endsSlot, "on date") + "  " + m.untilDate.View()
+			}
+
+			rows = append(rows,
+				formRow{"Every", []int{intervalSlot}, cycler(intervalSlot, everyValue)},
+				formRow{"Until", []int{endsSlot, untilDateSlot}, untilValue},
+			)
+		}
+	}
+
+	rows = append(rows, formRow{"Calendar", []int{calendarSlot}, calendarValue})
 
 	for _, row := range rows {
 		labelStyle := lipgloss.NewStyle().Foreground(theme.Muted)

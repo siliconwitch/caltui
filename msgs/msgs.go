@@ -10,19 +10,32 @@ type FocusDateMsg struct{ Date time.Time }
 
 type EventSelectedMsg struct{ Event *calendar.Event }
 
+type EditScope int
+
+const (
+	ScopeUnset EditScope = iota
+	ScopeOccurrence
+	ScopeSeries
+)
+
 type OpenEventFormMsg struct {
 	Event calendar.Event
 	IsNew bool
+	Scope EditScope
 }
 
 type EventFormSubmittedMsg struct {
 	Event calendar.Event
 	IsNew bool
+	Scope EditScope
 }
 
 type RequestDeleteMsg struct{ Event calendar.Event }
 
-type DeleteConfirmedMsg struct{ Event calendar.Event }
+type DeleteConfirmedMsg struct {
+	Event calendar.Event
+	Scope EditScope
+}
 
 type ClosePopupMsg struct{}
 
