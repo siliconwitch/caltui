@@ -387,3 +387,64 @@ func TestDecorateColorOverrides(t *testing.T) {
 		})
 	}
 }
+
+func TestSyncKeepsCacheOnSuddenEmptyResult(t *testing.T) {
+	offsite := Event{
+		ID:       "uid-1",
+		Title:    "Offsite",
+		Calendar: "Work",
+		Start:    time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC),
+		End:      time.Date(2026, 6, 1, 11, 0, 0, 0, time.UTC),
+	}
+
+	client := &fakeClient{
+		calendars: []Calendar{{Name: "Work"}},
+		events:    []Event{offsite},
+	}
+
+	account := &remoteAccount{name: "work", client: client}
+
+	remote := testRemote(t, account)
+
+	if err := remote.Sync("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	client.events = nil
+
+	err := remote.Sync("work")
+
+	if err == nil || !strings.Contains(err.Error(), "keeping the cached copy") {
+		t.Fatalf("want a kept-cache error on the first empty sync, got %v", err)
+	}
+
+	if events := remote.Events(remote.from, remote.to); len(events) != 1 {
+		t.Fatalf("want the cached event kept after a suspect empty sync, got %+v", events)
+	}
+
+	cached, readErr := os.ReadFile(remote.cachePath("work"))
+
+	if readErr != nil || !strings.Contains(string(cached), "Offsite") {
+		t.Fatalf("want the on-disk cache untouched, got %q (%v)", cached, readErr)
+	}
+
+	if err := remote.Sync("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	if events := remote.Events(remote.from, remote.to); len(events) != 0 {
+		t.Fatalf("want the confirmed empty result accepted, got %+v", events)
+	}
+
+	client.events = []Event{{ID: "uid-2", Title: "Retro", Calendar: "Work"}}
+
+	if err := remote.Sync("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	client.events = nil
+
+	if err := remote.Sync("work"); err == nil {
+		t.Fatal("want the guard re-armed after a non-empty sync")
+	}
+}

@@ -34,11 +34,12 @@ type writableClient interface {
 }
 
 type remoteAccount struct {
-	name      string
-	opMutex   sync.Mutex
-	client    remoteClient
-	calendars []Calendar
-	events    []Event
+	name         string
+	opMutex      sync.Mutex
+	client       remoteClient
+	calendars    []Calendar
+	events       []Event
+	suspectEmpty bool
 }
 
 type Remote struct {
@@ -162,6 +163,22 @@ func (r *Remote) Sync(name string) error {
 
 		return err
 	}
+
+	r.stateMutex.RLock()
+	hadEvents := len(account.events) > 0
+	r.stateMutex.RUnlock()
+
+	if len(events) == 0 && hadEvents && !account.suspectEmpty {
+		account.suspectEmpty = true
+		account.opMutex.Unlock()
+
+		return fmt.Errorf(
+			"account %q suddenly reports no events, keeping the cached copy: refresh again to accept the empty calendar",
+			name,
+		)
+	}
+
+	account.suspectEmpty = false
 
 	cacheErr := r.saveCache(account.name, calendars, events)
 	account.opMutex.Unlock()
