@@ -162,6 +162,7 @@ func singleEvent(icalEvent ical.Event, calendarName string, location *time.Locat
 
 	title, _ := icalEvent.Props.Text(ical.PropSummary)
 	eventLocation, _ := icalEvent.Props.Text(ical.PropLocation)
+	description, _ := icalEvent.Props.Text(ical.PropDescription)
 
 	var attendees []string
 	for _, attendeeProp := range icalEvent.Props.Values(ical.PropAttendee) {
@@ -176,12 +177,13 @@ func singleEvent(icalEvent ical.Event, calendarName string, location *time.Locat
 	startProp := icalEvent.Props.Get(ical.PropDateTimeStart)
 
 	return Event{
-		Title:     title,
-		Start:     start,
-		End:       end,
-		AllDay:    startProp.ValueType() == ical.ValueDate,
-		Location:  eventLocation,
-		Attendees: attendees,
-		Calendar:  calendarName,
+		Title:       title,
+		Start:       start,
+		End:         end,
+		AllDay:      startProp.ValueType() == ical.ValueDate,
+		Location:    eventLocation,
+		Description: strings.ReplaceAll(description, "\r\n", "\n"),
+		Attendees:   attendees,
+		Calendar:    calendarName,
 	}, true
 }

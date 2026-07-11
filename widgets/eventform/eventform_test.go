@@ -142,7 +142,7 @@ func TestComposedEvent(t *testing.T) {
 
 			event, problem := composedEvent(
 				calendar.Event{},
-				"Test event",
+				"Test event", "Test location", "Test notes",
 				testCase.allDay,
 				testCase.startDate, testCase.startTime, testCase.endDate, testCase.endTime,
 				startZone, endZone, time.Local,
@@ -163,6 +163,10 @@ func TestComposedEvent(t *testing.T) {
 
 			if event.AllDay != testCase.allDay {
 				t.Fatalf("got AllDay %v, want %v", event.AllDay, testCase.allDay)
+			}
+
+			if event.Location != "Test location" || event.Description != "Test notes" {
+				t.Fatalf("got location %q description %q, want the composed values", event.Location, event.Description)
 			}
 		})
 	}

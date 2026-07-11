@@ -20,6 +20,8 @@ import (
 
 const (
 	titleSlot = iota
+	locationSlot
+	notesSlot
 	allDaySlot
 	startDateSlot
 	startTimeSlot
@@ -40,6 +42,8 @@ type Model struct {
 	calendars     []calendar.Calendar
 	location      *time.Location
 	titleInput    textinput.Model
+	locationInput textinput.Model
+	notesInput    textinput.Model
 	startDate     maskinput.Field
 	startTime     maskinput.Field
 	endDate       maskinput.Field
@@ -59,23 +63,29 @@ type Model struct {
 }
 
 func New(calendars []calendar.Calendar, location *time.Location) Model {
-	titleInput := textinput.New()
-	titleInput.Prompt = ""
-	titleInput.Width = maxInnerWidth - labelWidth - 2
-
 	return Model{
-		calendars:  calendars,
-		location:   location,
-		titleInput: titleInput,
-		startDate:  maskinput.NewDate(false),
-		startTime:  maskinput.NewTime(),
-		endDate:    maskinput.NewDate(false),
-		endTime:    maskinput.NewTime(),
-		startZone:  location,
-		endZone:    location,
-		picker:     timezone.NewPicker(),
-		innerWidth: maxInnerWidth,
+		calendars:     calendars,
+		location:      location,
+		titleInput:    newTextInput(),
+		locationInput: newTextInput(),
+		notesInput:    newTextInput(),
+		startDate:     maskinput.NewDate(false),
+		startTime:     maskinput.NewTime(),
+		endDate:       maskinput.NewDate(false),
+		endTime:       maskinput.NewTime(),
+		startZone:     location,
+		endZone:       location,
+		picker:        timezone.NewPicker(),
+		innerWidth:    maxInnerWidth,
 	}
+}
+
+func newTextInput() textinput.Model {
+	input := textinput.New()
+	input.Prompt = ""
+	input.Width = maxInnerWidth - labelWidth - 2
+
+	return input
 }
 
 func (m Model) Init() tea.Cmd {
@@ -87,6 +97,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.innerWidth = min(maxInnerWidth, max(minInnerWidth, msg.Width-4))
 		m.titleInput.Width = m.innerWidth - labelWidth - 2
+		m.locationInput.Width = m.innerWidth - labelWidth - 2
+		m.notesInput.Width = m.innerWidth - labelWidth - 2
 
 		return m, nil
 
@@ -117,6 +129,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.titleInput.SetValue(msg.Event.Title)
+		m.locationInput.SetValue(msg.Event.Location)
+		m.notesInput.SetValue(strings.ReplaceAll(msg.Event.Description, "\n", " "))
 		m.startDate = m.startDate.WithDate(msg.Event.Start)
 		m.startTime = m.startTime.WithTime(msg.Event.Start.Hour(), msg.Event.Start.Minute())
 		m.endDate = m.endDate.WithDate(endDisplay)
@@ -198,9 +212,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				calendarName = m.calendars[m.calendarIndex].Name
 			}
 
+			description := m.original.Description
+			if typed := strings.TrimSpace(m.notesInput.Value()); typed != strings.TrimSpace(strings.ReplaceAll(description, "\n", " ")) {
+				description = typed
+			}
+
 			submitted, problem := composedEvent(
 				m.original,
 				strings.TrimSpace(m.titleInput.Value()),
+				strings.TrimSpace(m.locationInput.Value()),
+				description,
 				m.allDay,
 				m.startDate, m.startTime, m.endDate, m.endTime,
 				m.startZone, m.endZone, m.location,
@@ -282,6 +303,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			return m, nil
 
+		case locationSlot:
+			input, cmd := m.locationInput.Update(msg)
+			m.locationInput = input
+
+			return m, cmd
+
+		case notesSlot:
+			input, cmd := m.notesInput.Update(msg)
+			m.notesInput = input
+
+			return m, cmd
+
 		default:
 			input, cmd := m.titleInput.Update(msg)
 			m.titleInput = input
@@ -290,20 +323,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	default:
-		input, cmd := m.titleInput.Update(msg)
-		m.titleInput = input
+		title, titleCmd := m.titleInput.Update(msg)
+		m.titleInput = title
 
-		return m, cmd
+		location, locationCmd := m.locationInput.Update(msg)
+		m.locationInput = location
+
+		notes, notesCmd := m.notesInput.Update(msg)
+		m.notesInput = notes
+
+		return m, tea.Batch(titleCmd, locationCmd, notesCmd)
 	}
 }
 
 func (m Model) slotOrder() []int {
 	if m.allDay {
-		return []int{titleSlot, allDaySlot, startDateSlot, endDateSlot, calendarSlot}
+		return []int{titleSlot, locationSlot, notesSlot, allDaySlot, startDateSlot, endDateSlot, calendarSlot}
 	}
 
 	return []int{
-		titleSlot, allDaySlot,
+		titleSlot, locationSlot, notesSlot, allDaySlot,
 		startDateSlot, startTimeSlot, startZoneSlot,
 		endDateSlot, endTimeSlot, endZoneSlot,
 		calendarSlot,
@@ -352,6 +391,8 @@ func (m Model) withTypingAdvance() Model {
 func (m Model) withFocusedSlot(slot int) Model {
 	m.focusedSlot = slot
 	m.titleInput.Blur()
+	m.locationInput.Blur()
+	m.notesInput.Blur()
 	m.startDate = m.startDate.Blur()
 	m.startTime = m.startTime.Blur()
 	m.endDate = m.endDate.Blur()
@@ -360,6 +401,10 @@ func (m Model) withFocusedSlot(slot int) Model {
 	switch slot {
 	case titleSlot:
 		m.titleInput.Focus()
+	case locationSlot:
+		m.locationInput.Focus()
+	case notesSlot:
+		m.notesInput.Focus()
 	case startDateSlot:
 		m.startDate = m.startDate.Focus()
 	case startTimeSlot:
@@ -394,7 +439,7 @@ func (m Model) withOpenPicker(query string) Model {
 
 func composedEvent(
 	original calendar.Event,
-	title string,
+	title, location, description string,
 	allDay bool,
 	startDate, startTime, endDate, endTime maskinput.Field,
 	startZone, endZone, defaultLocation *time.Location,
@@ -406,6 +451,8 @@ func composedEvent(
 
 	event := original
 	event.Title = title
+	event.Location = location
+	event.Description = description
 	event.AllDay = allDay
 	event.Calendar = calendarName
 	event.Color = ""
@@ -505,6 +552,8 @@ func (m Model) View() string {
 		value string
 	}{
 		{"Title", []int{titleSlot}, m.titleInput.View()},
+		{"Location", []int{locationSlot}, m.locationInput.View()},
+		{"Notes", []int{notesSlot}, m.notesInput.View()},
 		{"All day", []int{allDaySlot}, allDayValue},
 		{"Start", []int{startDateSlot, startTimeSlot, startZoneSlot}, startValue},
 		{"End", []int{endDateSlot, endTimeSlot, endZoneSlot}, endValue},

@@ -247,3 +247,29 @@ func TestEventsFromICalAttendees(t *testing.T) {
 		t.Fatalf("want [Priya marcus@example.com], got %v", attendees)
 	}
 }
+
+func TestDescriptionRoundTrip(t *testing.T) {
+	data := decodeICS(t,
+		"BEGIN:VEVENT",
+		"UID:one",
+		"DTSTART:20260601T100000Z",
+		"DTEND:20260601T110000Z",
+		"SUMMARY:Standup",
+		"DESCRIPTION:Agenda:\\n1. Retro\\n2. Plans",
+		"END:VEVENT",
+	)
+
+	from := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+
+	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
+	events := eventsFromICal(data, "Work", from, to, time.UTC)
+
+	if len(events) != 1 {
+		t.Fatalf("want 1 event, got %d", len(events))
+	}
+
+	if events[0].Description != "Agenda:\n1. Retro\n2. Plans" {
+		t.Fatalf("want unescaped multiline description, got %q", events[0].Description)
+	}
+}

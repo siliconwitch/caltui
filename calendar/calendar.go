@@ -3,16 +3,17 @@ package calendar
 import "time"
 
 type Event struct {
-	ID        string
-	Title     string
-	Start     time.Time
-	End       time.Time
-	AllDay    bool
-	Location  string
-	Attendees []string
-	Calendar  string
-	Color     string
-	Recurring bool
+	ID          string
+	Title       string
+	Start       time.Time
+	End         time.Time
+	AllDay      bool
+	Location    string
+	Description string
+	Attendees   []string
+	Calendar    string
+	Color       string
+	Recurring   bool
 }
 
 type Calendar struct {

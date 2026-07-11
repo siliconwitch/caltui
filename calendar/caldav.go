@@ -664,6 +664,12 @@ func applyEventProps(icalEvent *ical.Event, event Event) {
 		icalEvent.Props.SetText(ical.PropLocation, event.Location)
 	}
 
+	if event.Description == "" {
+		icalEvent.Props.Del(ical.PropDescription)
+	} else {
+		icalEvent.Props.SetText(ical.PropDescription, event.Description)
+	}
+
 	icalEvent.Props.Del(ical.PropDuration)
 
 	if event.AllDay {

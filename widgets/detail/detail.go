@@ -139,6 +139,16 @@ func (m Model) View() string {
 		lines = append(lines, muted.Render("Attendees: "+strings.Join(m.event.Attendees, ", ")))
 	}
 
+	if m.event.Description != "" {
+		descriptionLines := strings.Split(m.event.Description, "\n")
+		if len(descriptionLines) > 4 {
+			descriptionLines = append(descriptionLines[:3], "…")
+		}
+
+		lines = append(lines, "")
+		lines = append(lines, descriptionLines...)
+	}
+
 	for i, line := range lines {
 		lines[i] = ansi.Truncate(line, textWidth, "…")
 	}
