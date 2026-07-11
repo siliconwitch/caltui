@@ -183,17 +183,7 @@ func (c *caldavClient) fetch(from, to time.Time) ([]Calendar, []Event, error) {
 }
 
 func (c *caldavClient) calendarObjects(ctx context.Context, calendarPath string, from, to time.Time) ([]caldav.CalendarObject, error) {
-	dataRequest := caldav.CalendarCompRequest{Name: "VCALENDAR", AllProps: true, AllComps: true}
-
-	query := &caldav.CalendarQuery{
-		CompRequest: dataRequest,
-		CompFilter: caldav.CompFilter{
-			Name:  "VCALENDAR",
-			Comps: []caldav.CompFilter{{Name: "VEVENT", Start: from.UTC(), End: to.UTC()}},
-		},
-	}
-
-	objects, queryErr := c.client.QueryCalendar(ctx, calendarPath, query)
+	objects, queryErr := c.queryObjects(ctx, calendarPath, from, to)
 	if queryErr == nil {
 		return objects, nil
 	}
@@ -210,7 +200,7 @@ func (c *caldavClient) calendarObjects(ctx context.Context, calendarPath string,
 
 	objects, err = c.client.MultiGetCalendar(ctx, calendarPath, &caldav.CalendarMultiGet{
 		Paths:       objectPaths,
-		CompRequest: dataRequest,
+		CompRequest: caldav.CalendarCompRequest{Name: "VCALENDAR", AllProps: true, AllComps: true},
 	})
 
 	if err == nil {
@@ -226,6 +216,96 @@ func (c *caldavClient) calendarObjects(ctx context.Context, calendarPath string,
 		}
 
 		objects = append(objects, caldav.CalendarObject{Path: objectPath, Data: data})
+	}
+
+	return objects, nil
+}
+
+// iCloud answers a calendar-data request that names components explicitly
+// (<comp name="VCALENDAR"><allcomp/>…) with hollow BEGIN:VCALENDAR/END:VCALENDAR
+// shells, so the query must request calendar-data bare.
+func (c *caldavClient) queryObjects(ctx context.Context, calendarPath string, from, to time.Time) ([]caldav.CalendarObject, error) {
+	timeRange := `<c:time-range start="` + from.UTC().Format("20060102T150405Z") +
+		`" end="` + to.UTC().Format("20060102T150405Z") + `"/>`
+
+	requestBody := `<?xml version="1.0" encoding="utf-8"?>` +
+		`<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">` +
+		`<d:prop><d:getetag/><c:calendar-data/></d:prop>` +
+		`<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT">` +
+		timeRange +
+		`</c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`
+
+	request, err := http.NewRequestWithContext(ctx, "REPORT", c.objectURL(calendarPath), strings.NewReader(requestBody))
+
+	if err != nil {
+		return nil, err
+	}
+
+	request.Header.Set("Depth", "1")
+	request.Header.Set("Content-Type", "text/xml; charset=utf-8")
+
+	response, err := c.httpClient.Do(request)
+
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusMultiStatus {
+		return nil, fmt.Errorf("querying events: server said %s", response.Status)
+	}
+
+	var report struct {
+		Responses []struct {
+			Href     string `xml:"href"`
+			Propstat []struct {
+				Prop struct {
+					CalendarData string `xml:"calendar-data"`
+				} `xml:"prop"`
+			} `xml:"propstat"`
+		} `xml:"response"`
+	}
+
+	data, err := io.ReadAll(response.Body)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if err := xml.Unmarshal(data, &report); err != nil {
+		return nil, fmt.Errorf("querying events: %w", err)
+	}
+
+	var objects []caldav.CalendarObject
+	for _, entry := range report.Responses {
+		parsedHref, err := url.Parse(strings.TrimSpace(entry.Href))
+
+		if err != nil {
+			continue
+		}
+
+		calendarData := ""
+		for _, propstat := range entry.Propstat {
+			if propstat.Prop.CalendarData != "" {
+				calendarData = propstat.Prop.CalendarData
+			}
+		}
+
+		if calendarData == "" {
+			continue
+		}
+
+		parsed, err := ical.NewDecoder(strings.NewReader(calendarData)).Decode()
+
+		if err != nil || len(parsed.Children) == 0 {
+			continue
+		}
+
+		objects = append(objects, caldav.CalendarObject{Path: parsedHref.Path, Data: parsed})
+	}
+
+	if len(objects) == 0 && len(report.Responses) > 0 {
+		return nil, fmt.Errorf("querying events: server returned no inline calendar data")
 	}
 
 	return objects, nil

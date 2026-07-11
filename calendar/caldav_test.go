@@ -16,6 +16,8 @@ const caldavTestICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//t
 	"BEGIN:VEVENT&#13;\nUID:offsite-1&#13;\nDTSTART:20260707T100000Z&#13;\nDTEND:20260707T113000Z&#13;\n" +
 	"SUMMARY:Offsite&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
 
+const caldavHollowICS = "BEGIN:VCALENDAR&#13;\nEND:VCALENDAR&#13;\n"
+
 type caldavServerOptions struct {
 	wellKnownWorks bool
 	queryMode      string
@@ -40,10 +42,10 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 			`</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`
 	}
 
-	eventReport := func(href string) string {
+	eventReport := func(href, data string) string {
 		return `<d:response><d:href>` + href + `</d:href><d:propstat><d:prop>` +
 			`<d:getetag>"etag-1"</d:getetag>` +
-			`<c:calendar-data>` + caldavTestICS + `</c:calendar-data>` +
+			`<c:calendar-data>` + data + `</c:calendar-data>` +
 			`</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`
 	}
 
@@ -97,7 +99,7 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 
 			if strings.Contains(string(requestBody), "calendar-multiget") {
 				if opts.queryMode == "multiget" {
-					multistatus(w, eventReport(requestPath+"offsite-1.ics"))
+					multistatus(w, eventReport(requestPath+"offsite-1.ics", caldavTestICS))
 				} else {
 					w.WriteHeader(http.StatusNotImplemented)
 				}
@@ -105,16 +107,22 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 				return
 			}
 
-			if opts.queryMode == "inline" {
-				multistatus(w, eventReport(requestPath+"offsite-1.ics"))
+			switch {
+			case opts.queryMode == "icloud" && strings.Contains(string(requestBody), "allcomp"):
+				multistatus(w, eventReport(requestPath+"offsite-1.ics", caldavHollowICS))
 
-				return
+			case opts.queryMode == "icloud", opts.queryMode == "inline":
+				multistatus(w, eventReport(requestPath+"offsite-1.ics", caldavTestICS))
+
+			case opts.queryMode == "hollow":
+				multistatus(w, eventReport(requestPath+"offsite-1.ics", caldavHollowICS))
+
+			default:
+				multistatus(w, `<d:response><d:href>`+requestPath+`offsite-1.ics</d:href>`+
+					`<d:propstat><d:prop><d:getetag>"etag-1"</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>`+
+					`<d:propstat><d:prop><c:calendar-data/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>`+
+					`</d:response>`)
 			}
-
-			multistatus(w, `<d:response><d:href>`+requestPath+`offsite-1.ics</d:href>`+
-				`<d:propstat><d:prop><d:getetag>"etag-1"</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>`+
-				`<d:propstat><d:prop><c:calendar-data/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>`+
-				`</d:response>`)
 
 		case "GET /cal/raj/work/offsite-1.ics/":
 			w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
@@ -168,6 +176,18 @@ func TestCaldavDiscoveryLadder(t *testing.T) {
 			name:         "query and multiget both unsupported falls back to downloads",
 			urlPath:      "",
 			options:      caldavServerOptions{wellKnownWorks: true, queryMode: "get"},
+			wantCalendar: "Work",
+		},
+		{
+			name:         "icloud serving hollow data for component-filtered requests",
+			urlPath:      "",
+			options:      caldavServerOptions{wellKnownWorks: true, queryMode: "icloud"},
+			wantCalendar: "Work",
+		},
+		{
+			name:         "hollow inline data falls back to downloads",
+			urlPath:      "",
+			options:      caldavServerOptions{wellKnownWorks: true, queryMode: "hollow"},
 			wantCalendar: "Work",
 		},
 	}

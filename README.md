@@ -114,7 +114,12 @@ file. Two account types are supported:
   automatically. Discovery tries the URL itself, then the server's
   `/.well-known/caldav` (needed by e.g. Zoho), then treats the URL as a
   single calendar — so if in doubt, the exact CalDAV address from your
-  provider's settings always works.
+  provider's settings always works. iCloud is the exception: discovery
+  cannot hop from `caldav.icloud.com` to your personal partition server,
+  so set `url` to your calendar home directly, e.g.
+  `https://pXX-caldav.icloud.com/<userid>/calendars/` (two `PROPFIND`
+  requests against `caldav.icloud.com` — `current-user-principal`, then
+  `calendar-home-set` — reveal it).
 - **`ics`** — read-only subscription to an iCalendar URL. This is how you
   connect Google Calendar without OAuth: copy the calendar's *"Secret address
   in iCal format"* from its settings. Any published `.ics` link works too.
