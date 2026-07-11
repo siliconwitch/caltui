@@ -44,7 +44,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case msgs.ClockTickMsg:
 		now := msg.Now
 
-		for _, event := range m.source.Events(now.AddDate(0, 0, -1), now.AddDate(0, 0, 31)) {
+		for _, event := range m.source.Events(now.AddDate(0, 0, -1), now.AddDate(1, 0, 0)) {
 			for _, offset := range event.Alarms {
 				alarmTime := event.Start.Add(offset)
 

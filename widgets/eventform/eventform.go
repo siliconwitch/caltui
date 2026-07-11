@@ -49,20 +49,20 @@ const (
 )
 
 type Model struct {
-	calendars     []calendar.Calendar
-	location      *time.Location
-	titleInput    textinput.Model
-	locationInput textinput.Model
-	notesInput    textinput.Model
-	startDate     maskinput.Field
-	startTime     maskinput.Field
-	endDate       maskinput.Field
-	endTime       maskinput.Field
-	startZone     *time.Location
-	endZone       *time.Location
-	picker        timezone.Picker
-	pickerOpen    bool
-	pickerTarget  int
+	calendars      []calendar.Calendar
+	location       *time.Location
+	titleInput     textinput.Model
+	locationInput  textinput.Model
+	notesInput     textinput.Model
+	startDate      maskinput.Field
+	startTime      maskinput.Field
+	endDate        maskinput.Field
+	endTime        maskinput.Field
+	startZone      *time.Location
+	endZone        *time.Location
+	picker         timezone.Picker
+	pickerOpen     bool
+	pickerTarget   int
 	allDay         bool
 	calendarIndex  int
 	focusedSlot    int
@@ -133,7 +133,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		untilSeed := msg.Event.Start
 		if m.endsOnDate {
-			untilSeed = msg.Event.Recurrence.Until
+			untilSeed = msg.Event.Recurrence.Until.In(msg.Event.Start.Location())
 		}
 		m.untilDate = m.untilDate.WithDate(untilSeed)
 
@@ -536,9 +536,14 @@ func (m Model) composedRecurrence() calendar.Recurrence {
 
 	original := m.original.Recurrence
 
+	comparisonZone := m.startZone
+	if m.allDay {
+		comparisonZone = m.location
+	}
+
 	sameEnding := original.Until.IsZero() == recurrence.Until.IsZero()
 	if !recurrence.Until.IsZero() && !original.Until.IsZero() {
-		originalYear, originalMonth, originalDay := original.Until.Date()
+		originalYear, originalMonth, originalDay := original.Until.In(comparisonZone).Date()
 
 		untilYear, untilMonth, untilDay := recurrence.Until.Date()
 

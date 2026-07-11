@@ -66,6 +66,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			m.selectedIndex = min(m.selectedIndex, len(entries)-1)
 			m.toggler.Toggle(entries[m.selectedIndex].Name)
 
 			return m, func() tea.Msg { return msgs.EventsChangedMsg{} }
@@ -95,12 +96,13 @@ func (m Model) View() string {
 			marker = "[ ]"
 		}
 
-		bullet := lipgloss.NewStyle().Foreground(lipgloss.Color(entry.Color)).Render("●")
+		plain := ansi.Truncate(marker+" ● "+entry.Name, innerWidth, "…")
 
-		row := ansi.Truncate(marker+" "+bullet+" "+entry.Name, innerWidth, "…")
+		row := strings.Replace(plain, "●",
+			lipgloss.NewStyle().Foreground(lipgloss.Color(entry.Color)).Render("●"), 1)
 
 		if index == m.selectedIndex {
-			row = lipgloss.NewStyle().Background(theme.SelectionBg).Render(row)
+			row = lipgloss.NewStyle().Background(theme.SelectionBg).Render(plain)
 		}
 
 		lines = append(lines, row)

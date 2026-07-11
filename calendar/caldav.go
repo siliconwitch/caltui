@@ -306,44 +306,44 @@ func (c *caldavClient) rerooted(targetURL *url.URL) error {
 	return nil
 }
 
+// The endpoint re-root is committed only after a discovery step succeeds, so
+// a failed sync never leaves object paths pointing at the wrong host.
 func (c *caldavClient) discoverCalendars(ctx context.Context) ([]discoveredCalendar, error) {
-	if err := c.rerooted(c.configuredURL); err != nil {
-		return nil, err
-	}
-
-	discoverFrom := func(baseURL *url.URL) ([]discoveredCalendar, error) {
+	discoverFrom := func(baseURL *url.URL) ([]discoveredCalendar, *url.URL, error) {
 		principalURL, err := c.findPrincipalURL(ctx, baseURL)
 
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		homeURL, err := c.findCalendarHomeURL(ctx, principalURL)
 
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
-		if err := c.rerooted(homeURL); err != nil {
-			return nil, err
+		calendars, err := c.listCalendars(ctx, homeURL)
+
+		if err != nil {
+			return nil, nil, err
 		}
 
-		return c.listCalendars(ctx, homeURL)
+		return calendars, homeURL, nil
 	}
 
-	calendars, configuredErr := discoverFrom(c.configuredURL)
+	calendars, homeURL, configuredErr := discoverFrom(c.configuredURL)
 	if configuredErr == nil {
-		return calendars, nil
+		return calendars, c.rerooted(homeURL)
 	}
 
 	if wellKnownURL, err := url.Parse(c.wellKnownURL); err == nil {
-		if calendars, err := discoverFrom(wellKnownURL); err == nil {
-			return calendars, nil
+		if calendars, homeURL, err := discoverFrom(wellKnownURL); err == nil {
+			return calendars, c.rerooted(homeURL)
 		}
 	}
 
 	if calendars, err := c.listCalendars(ctx, c.configuredURL); err == nil && len(calendars) > 0 {
-		return calendars, nil
+		return calendars, c.rerooted(c.configuredURL)
 	}
 
 	return nil, fmt.Errorf(
@@ -750,8 +750,8 @@ func (c *caldavClient) create(event Event) (Event, error) {
 		return Event{}, fmt.Errorf("unknown calendar %q", event.Calendar)
 	}
 
-	if c.readOnlyCalendars[event.Calendar] {
-		return Event{}, fmt.Errorf("calendar %q is a read-only subscription", event.Calendar)
+	if err := c.refuseReadOnly(event.Calendar); err != nil {
+		return Event{}, err
 	}
 
 	uidBytes := make([]byte, 16)
@@ -803,6 +803,10 @@ func (c *caldavClient) update(event Event) error {
 		return fmt.Errorf("event not found on the server: refresh and try again")
 	}
 
+	if err := c.refuseReadOnly(object.calendarName); err != nil {
+		return err
+	}
+
 	if object.recurring {
 		return fmt.Errorf("recurring events are read-only for now")
 	}
@@ -851,6 +855,28 @@ func (c *caldavClient) update(event Event) error {
 	return nil
 }
 
+func (c *caldavClient) refuseReadOnly(calendarName string) error {
+	if c.readOnlyCalendars[calendarName] {
+		return fmt.Errorf("calendar %q is a read-only subscription", calendarName)
+	}
+
+	return nil
+}
+
+func ruleBeyondCaltui(rule string) bool {
+	for _, part := range []string{
+		"BYDAY=", "COUNT=", "BYMONTHDAY=", "BYSETPOS=", "BYWEEKNO=",
+		"BYYEARDAY=", "BYMONTH=", "BYHOUR=", "BYMINUTE=", "WKST=",
+		"FREQ=SECONDLY", "FREQ=MINUTELY", "FREQ=HOURLY",
+	} {
+		if strings.Contains(rule, part) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func masterChild(data *ical.Calendar, uid string) *ical.Component {
 	for _, child := range data.Children {
 		if child.Name != ical.CompEvent {
@@ -887,6 +913,10 @@ func (c *caldavClient) updateOccurrence(event Event) error {
 		return fmt.Errorf("event not found on the server: refresh and try again")
 	}
 
+	if err := c.refuseReadOnly(object.calendarName); err != nil {
+		return err
+	}
+
 	if event.Calendar != object.calendarName {
 		return fmt.Errorf("moving a single occurrence to another calendar is not supported yet")
 	}
@@ -915,7 +945,22 @@ func (c *caldavClient) updateOccurrence(event Event) error {
 
 	if override == nil {
 		overrideEvent := ical.NewEvent()
-		overrideEvent.Props.SetText(ical.PropUID, object.uid)
+
+		for name, props := range master.Props {
+			switch name {
+			case ical.PropRecurrenceRule, ical.PropExceptionDates, ical.PropRecurrenceDates, ical.PropRecurrenceID:
+				continue
+			}
+
+			overrideEvent.Props[name] = append([]ical.Prop(nil), props...)
+		}
+
+		for _, child := range master.Children {
+			if child.Name == ical.CompAlarm {
+				overrideEvent.Children = append(overrideEvent.Children, child)
+			}
+		}
+
 		overrideEvent.Props.Set(occurrenceProp(ical.PropRecurrenceID, master, object.occurrenceTime))
 
 		object.data.Children = append(object.data.Children, overrideEvent.Component)
@@ -944,6 +989,10 @@ func (c *caldavClient) removeOccurrence(id string) error {
 	object, ok := c.objects[id]
 	if !ok {
 		return fmt.Errorf("event not found on the server: refresh and try again")
+	}
+
+	if err := c.refuseReadOnly(object.calendarName); err != nil {
+		return err
 	}
 
 	master := masterChild(object.data, object.uid)
@@ -989,6 +1038,10 @@ func (c *caldavClient) updateSeries(event Event) error {
 		return fmt.Errorf("event not found on the server: refresh and try again")
 	}
 
+	if err := c.refuseReadOnly(object.calendarName); err != nil {
+		return err
+	}
+
 	if event.Calendar != object.calendarName {
 		return fmt.Errorf("moving a repeating series to another calendar is not supported yet")
 	}
@@ -1006,19 +1059,66 @@ func (c *caldavClient) updateSeries(event Event) error {
 		return fmt.Errorf("updating series: %w", err)
 	}
 
-	seriesEvent := event
-	seriesEvent.Start = masterStart
-	seriesEvent.End = masterStart.Add(event.End.Sub(event.Start))
+	masterStartProp := master.Props.Get(ical.PropDateTimeStart)
 
-	if !event.AllDay {
+	masterAllDay := masterStartProp != nil && masterStartProp.ValueType() == ical.ValueDate
+
+	ruleProp := master.Props.Get(ical.PropRecurrenceRule)
+
+	specTouched := false
+	if ruleProp != nil {
+		existing := recurrenceSpec(master.Props)
+
+		sameUntilDay := existing.Until.IsZero() == event.Recurrence.Until.IsZero()
+		if !existing.Until.IsZero() && !event.Recurrence.Until.IsZero() {
+			zone := event.Start.Location()
+
+			existingYear, existingMonth, existingDay := existing.Until.In(zone).Date()
+
+			untilYear, untilMonth, untilDay := event.Recurrence.Until.In(zone).Date()
+
+			sameUntilDay = existingYear == untilYear && existingMonth == untilMonth && existingDay == untilDay
+		}
+
+		specTouched = existing.Frequency != event.Recurrence.Frequency ||
+			max(existing.Interval, 1) != max(event.Recurrence.Interval, 1) ||
+			!sameUntilDay
+	}
+
+	if ruleProp != nil && (specTouched || masterAllDay != event.AllDay) && ruleBeyondCaltui(ruleProp.Value) {
+		return fmt.Errorf("this series repeats with rules caltui cannot edit; change it in the app that created it")
+	}
+
+	// The user's date fields are ignored for a whole series: only the time of
+	// day moves, anchored on the master's date as seen in the user's zone.
+	masterLocal := masterStart.In(event.Start.Location())
+
+	seriesEvent := event
+
+	if event.AllDay {
+		startDay := time.Date(event.Start.Year(), event.Start.Month(), event.Start.Day(), 0, 0, 0, 0, time.UTC)
+
+		endDay := time.Date(event.End.Year(), event.End.Month(), event.End.Day(), 0, 0, 0, 0, time.UTC)
+
+		daySpan := max(1, int(endDay.Sub(startDay).Hours()/24))
+
+		seriesEvent.Start = time.Date(masterLocal.Year(), masterLocal.Month(), masterLocal.Day(), 0, 0, 0, 0, event.Start.Location())
+		seriesEvent.End = seriesEvent.Start.AddDate(0, 0, daySpan)
+	} else {
 		seriesEvent.Start = time.Date(
-			masterStart.Year(), masterStart.Month(), masterStart.Day(),
-			event.Start.Hour(), event.Start.Minute(), 0, 0, event.Start.Location(),
+			masterLocal.Year(), masterLocal.Month(), masterLocal.Day(),
+			event.Start.Hour(), event.Start.Minute(), masterLocal.Second(), 0, event.Start.Location(),
 		)
 		seriesEvent.End = seriesEvent.Start.Add(event.End.Sub(event.Start))
 	}
 
-	if !seriesEvent.Start.Equal(masterStart) {
+	repeatTurnedOff := ruleProp != nil && event.Recurrence.Frequency == ""
+
+	structureChanged := !seriesEvent.Start.Equal(masterStart) ||
+		masterAllDay != event.AllDay ||
+		repeatTurnedOff
+
+	if structureChanged {
 		master.Props.Del(ical.PropExceptionDates)
 
 		var children []*ical.Component
@@ -1034,6 +1134,10 @@ func (c *caldavClient) updateSeries(event Event) error {
 			children = append(children, child)
 		}
 		object.data.Children = children
+	}
+
+	if masterAllDay != event.AllDay {
+		master.Props.Del(ical.PropRecurrenceRule)
 	}
 
 	applyEventProps(&ical.Event{Component: master}, seriesEvent)
@@ -1060,6 +1164,10 @@ func (c *caldavClient) removeSeries(id string) error {
 		return fmt.Errorf("event not found on the server: refresh and try again")
 	}
 
+	if err := c.refuseReadOnly(object.calendarName); err != nil {
+		return err
+	}
+
 	return c.removeObject(object, id)
 }
 
@@ -1067,6 +1175,10 @@ func (c *caldavClient) remove(id string) error {
 	object, ok := c.objects[id]
 	if !ok {
 		return fmt.Errorf("event not found on the server: refresh and try again")
+	}
+
+	if err := c.refuseReadOnly(object.calendarName); err != nil {
+		return err
 	}
 
 	if object.recurring {
@@ -1128,7 +1240,12 @@ func applyEventProps(icalEvent *ical.Event, event Event) {
 
 	icalEvent.Props.Del(ical.PropDuration)
 
-	if event.AllDay {
+	recurs := event.Recurrence.Frequency != "" || icalEvent.Props.Get(ical.PropRecurrenceRule) != nil
+
+	zoneName := event.Start.Location().String()
+
+	switch {
+	case event.AllDay:
 		startProp := ical.NewProp(ical.PropDateTimeStart)
 		startProp.SetDate(event.Start)
 		icalEvent.Props.Set(startProp)
@@ -1136,7 +1253,15 @@ func applyEventProps(icalEvent *ical.Event, event Event) {
 		endProp := ical.NewProp(ical.PropDateTimeEnd)
 		endProp.SetDate(event.End)
 		icalEvent.Props.Set(endProp)
-	} else {
+
+	// A repeating time must stay wall-clock across DST changes, which needs a
+	// TZID anchor; a fixed UTC instant would drift. Zones without an IANA name
+	// (time.Local) cannot be written as a TZID, so they keep the UTC form.
+	case recurs && strings.Contains(zoneName, "/"):
+		icalEvent.Props.SetDateTime(ical.PropDateTimeStart, event.Start)
+		icalEvent.Props.SetDateTime(ical.PropDateTimeEnd, event.End)
+
+	default:
 		icalEvent.Props.SetDateTime(ical.PropDateTimeStart, event.Start.UTC())
 		icalEvent.Props.SetDateTime(ical.PropDateTimeEnd, event.End.UTC())
 	}
@@ -1147,9 +1272,19 @@ func applyEventProps(icalEvent *ical.Event, event Event) {
 
 	existing := recurrenceSpec(icalEvent.Props)
 
+	sameUntil := existing.Until.IsZero() == event.Recurrence.Until.IsZero()
+	if !existing.Until.IsZero() && !event.Recurrence.Until.IsZero() {
+		zone := event.Start.Location()
+
+		existingYear, existingMonth, existingDay := existing.Until.In(zone).Date()
+
+		untilYear, untilMonth, untilDay := event.Recurrence.Until.In(zone).Date()
+
+		sameUntil = existingYear == untilYear && existingMonth == untilMonth && existingDay == untilDay
+	}
+
 	sameFrequency := existing.Frequency == event.Recurrence.Frequency
 	sameInterval := max(existing.Interval, 1) == max(event.Recurrence.Interval, 1)
-	sameUntil := existing.Until.Equal(event.Recurrence.Until)
 
 	if sameFrequency && sameInterval && sameUntil {
 		return

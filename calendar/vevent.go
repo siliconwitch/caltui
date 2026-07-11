@@ -230,6 +230,10 @@ func singleEvent(icalEvent ical.Event, calendarName, selfEmail string, location 
 			}
 
 		case ical.ValueDateTime:
+			if icalEvent.Props.Get(ical.PropRecurrenceRule) != nil {
+				continue
+			}
+
 			at, err := triggerProp.DateTime(location)
 
 			if err != nil {

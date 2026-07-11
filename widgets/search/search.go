@@ -156,12 +156,13 @@ func (m Model) View() string {
 				when = event.Start.In(m.location).Format("Mon 2 Jan") + " all day"
 			}
 
-			bullet := lipgloss.NewStyle().Foreground(lipgloss.Color(event.Color)).Render("●")
+			plain := ansi.Truncate("● "+when+"  "+event.Title, innerWidth, "…")
 
-			row := ansi.Truncate(bullet+" "+when+"  "+event.Title, innerWidth, "…")
+			row := strings.Replace(plain, "●",
+				lipgloss.NewStyle().Foreground(lipgloss.Color(event.Color)).Render("●"), 1)
 
 			if index == m.selectedIndex {
-				row = lipgloss.NewStyle().Background(theme.SelectionBg).Render(row)
+				row = lipgloss.NewStyle().Background(theme.SelectionBg).Render(plain)
 			}
 
 			lines = append(lines, row)

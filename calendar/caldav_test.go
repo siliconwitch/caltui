@@ -33,6 +33,14 @@ type caldavServerOptions struct {
 	subscribedCalendar bool
 }
 
+const caldavLateICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
+	"BEGIN:VEVENT&#13;\nUID:late-1&#13;\nDTSTART:20260707T233000Z&#13;\nDTEND:20260708T000000Z&#13;\n" +
+	"SUMMARY:Late show&#13;\nRRULE:FREQ=DAILY&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
+
+const caldavBydayICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
+	"BEGIN:VEVENT&#13;\nUID:byday-1&#13;\nDTSTART:20260706T090000Z&#13;\nDTEND:20260706T093000Z&#13;\n" +
+	"SUMMARY:Standup&#13;\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
+
 const caldavVidaICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
 	"BEGIN:VEVENT&#13;\nUID:vida-1&#13;\nDTSTART:20260709T180000Z&#13;\nDTEND:20260709T190000Z&#13;\n" +
 	"SUMMARY:Vida class&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
@@ -141,6 +149,12 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 
 			case opts.queryMode == "recurring":
 				multistatus(w, eventReport(requestPath+"standup-1.ics", caldavRecurringICS))
+
+			case opts.queryMode == "late":
+				multistatus(w, eventReport(requestPath+"late-1.ics", caldavLateICS))
+
+			case opts.queryMode == "byday":
+				multistatus(w, eventReport(requestPath+"byday-1.ics", caldavBydayICS))
 
 			case opts.queryMode == "hollow":
 				multistatus(w, eventReport(requestPath+"offsite-1.ics", caldavHollowICS))
@@ -1076,5 +1090,181 @@ func TestCaldavCrossHostDiscovery(t *testing.T) {
 
 	if len(putBodies) != 1 || !strings.Contains(putBodies[0], "SUMMARY:Planning") {
 		t.Fatalf("want the create PUT to land on the partition host, got %q", putBodies)
+	}
+}
+
+func TestCaldavSeriesEditAcrossZones(t *testing.T) {
+	stockholm, err := time.LoadLocation("Europe/Stockholm")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientFor := func(t *testing.T, queryMode string, putBodies *[]string) *caldavClient {
+		t.Helper()
+
+		server := caldavTestServer(t, caldavServerOptions{
+			wellKnownWorks: true,
+			queryMode:      queryMode,
+			putBodies:      putBodies,
+		})
+		t.Cleanup(server.Close)
+
+		account := Account{Name: "work", Type: "caldav", URL: server.URL, Username: "raj@example.com"}
+
+		client, err := newCaldavClient(account, "app-password", stockholm)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+
+		to := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+		if _, _, err := client.fetch(from, to); err != nil {
+			t.Fatal(err)
+		}
+
+		return client
+	}
+
+	t.Run("title edit keeps the series anchored when utc and local dates differ", func(t *testing.T) {
+		var putBodies []string
+
+		client := clientFor(t, "late", &putBodies)
+
+		occurrence := time.Date(2026, 7, 8, 23, 30, 0, 0, time.UTC)
+
+		renamed := Event{
+			ID:        fmt.Sprintf("late-1@%d", occurrence.Unix()),
+			Title:     "Renamed late show",
+			Calendar:  "Work",
+			Start:     occurrence.In(stockholm),
+			End:       occurrence.Add(30 * time.Minute).In(stockholm),
+			Recurring: true,
+			Recurrence: Recurrence{Frequency: "daily", Interval: 1},
+		}
+
+		if err := client.updateSeries(renamed); err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(putBodies[0], "DTSTART;TZID=Europe/Stockholm:20260708T013000") {
+			t.Fatalf("want the master anchored to its original instant with a TZID, got %q", putBodies[0])
+		}
+
+		if !strings.Contains(putBodies[0], "RRULE:FREQ=DAILY") {
+			t.Fatalf("want the rule untouched, got %q", putBodies[0])
+		}
+	})
+
+	t.Run("rules beyond the form refuse edits but allow renames", func(t *testing.T) {
+		var putBodies []string
+
+		client := clientFor(t, "byday", &putBodies)
+
+		occurrence := time.Date(2026, 7, 6, 9, 0, 0, 0, time.UTC)
+
+		renamed := Event{
+			ID:        fmt.Sprintf("byday-1@%d", occurrence.Unix()),
+			Title:     "Renamed standup",
+			Calendar:  "Work",
+			Start:     occurrence.In(stockholm),
+			End:       occurrence.Add(30 * time.Minute).In(stockholm),
+			Recurring: true,
+			Recurrence: Recurrence{Frequency: "weekly", Interval: 1},
+		}
+
+		if err := client.updateSeries(renamed); err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(putBodies[0], "BYDAY=MO,WE,FR") {
+			t.Fatalf("want the byday rule preserved on a rename, got %q", putBodies[0])
+		}
+
+		bounded := renamed
+		bounded.Recurrence.Until = time.Date(2026, 9, 1, 0, 0, 0, 0, stockholm)
+
+		err := client.updateSeries(bounded)
+
+		if err == nil || !strings.Contains(err.Error(), "cannot edit") {
+			t.Fatalf("want rule edits refused on byday rules, got %v", err)
+		}
+	})
+
+	t.Run("turning repeat off deletes the rule", func(t *testing.T) {
+		var putBodies []string
+
+		client := clientFor(t, "recurring", &putBodies)
+
+		occurrence := time.Date(2026, 7, 8, 9, 0, 0, 0, time.UTC)
+
+		single := Event{
+			ID:        fmt.Sprintf("standup-1@%d", occurrence.Unix()),
+			Title:     "Standup",
+			Calendar:  "Work",
+			Start:     occurrence.In(stockholm),
+			End:       occurrence.Add(30 * time.Minute).In(stockholm),
+			Recurring: true,
+		}
+
+		if err := client.updateSeries(single); err != nil {
+			t.Fatal(err)
+		}
+
+		if strings.Contains(putBodies[0], "RRULE") {
+			t.Fatalf("want the rule removed when repeat is turned off, got %q", putBodies[0])
+		}
+	})
+}
+
+func TestCaldavCreateRecurringWithZone(t *testing.T) {
+	stockholm, err := time.LoadLocation("Europe/Stockholm")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var putBodies []string
+
+	server := caldavTestServer(t, caldavServerOptions{
+		wellKnownWorks: true,
+		queryMode:      "inline",
+		putBodies:      &putBodies,
+	})
+	defer server.Close()
+
+	account := Account{Name: "work", Type: "caldav", URL: server.URL, Username: "raj@example.com"}
+
+	client, err := newCaldavClient(account, "app-password", stockholm)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	if _, _, err := client.fetch(from, to); err != nil {
+		t.Fatal(err)
+	}
+
+	weekly := Event{
+		Title:      "Climbing",
+		Calendar:   "Work",
+		Start:      time.Date(2026, 7, 8, 18, 0, 0, 0, stockholm),
+		End:        time.Date(2026, 7, 8, 20, 0, 0, 0, stockholm),
+		Recurrence: Recurrence{Frequency: "weekly"},
+	}
+
+	if _, err := client.create(weekly); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(putBodies[0], "DTSTART;TZID=Europe/Stockholm:20260708T180000") {
+		t.Fatalf("want a TZID anchored start for a repeating event, got %q", putBodies[0])
 	}
 }

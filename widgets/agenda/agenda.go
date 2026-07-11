@@ -1,6 +1,7 @@
 package agenda
 
 import (
+	"fmt"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -226,8 +227,8 @@ func (m Model) View() string {
 	events := m.upcomingEvents()
 
 	if len(events) == 0 {
-		return lipgloss.NewStyle().Foreground(theme.Muted).Render(" No events in the next " +
-			m.anchorDate.AddDate(0, 0, m.config.LookaheadDays).Sub(m.anchorDate).String())
+		return lipgloss.NewStyle().Foreground(theme.Muted).Render(
+			fmt.Sprintf(" No events in the next %d days", m.config.LookaheadDays))
 	}
 
 	now := time.Now().In(m.location)

@@ -30,6 +30,10 @@ func NewVisible(source Source) *Visible {
 		return visible
 	}
 
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+		return visible
+	}
+
 	// The leading dot keeps the file out of the <account>.json namespace,
 	// since account names cannot contain dots.
 	visible.hiddenPath = filepath.Join(cacheDir, ".hidden.json")
