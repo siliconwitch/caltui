@@ -12,6 +12,7 @@ import (
 	"github.com/siliconwitch/caltui/config"
 	"github.com/siliconwitch/caltui/tui"
 	"github.com/siliconwitch/caltui/widgets/agenda"
+	"github.com/siliconwitch/caltui/widgets/alertpopup"
 	"github.com/siliconwitch/caltui/widgets/calendars"
 	"github.com/siliconwitch/caltui/widgets/confirm"
 	"github.com/siliconwitch/caltui/widgets/dayview"
@@ -90,6 +91,7 @@ func main() {
 		scopepicker.New(),
 		search.New(visible, location),
 		calendars.New(visible),
+		alertpopup.New(visible, location),
 	)
 
 	program := tea.NewProgram(root, tea.WithAltScreen())

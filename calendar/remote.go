@@ -134,6 +134,7 @@ func NewRemote(accounts []Account, colorOverrides map[string]string, location *t
 
 			client = &icsClient{
 				accountName: account.Name,
+				selfEmail:   account.Email,
 				url:         subscriptionURL,
 				httpClient:  &http.Client{Timeout: 30 * time.Second},
 				location:    location,

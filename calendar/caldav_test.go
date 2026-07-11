@@ -23,9 +23,9 @@ const caldavRecurringICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//te
 	"SUMMARY:Standup&#13;\nRRULE:FREQ=DAILY&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
 
 type caldavServerOptions struct {
-	wellKnownWorks bool
-	queryMode      string
-	putBodies      *[]string
+	wellKnownWorks     bool
+	queryMode          string
+	putBodies          *[]string
 	putHeaders         *[]http.Header
 	deleteHeaders      *[]http.Header
 	rejectWrites       bool
@@ -697,12 +697,12 @@ func TestCaldavRecurringWrites(t *testing.T) {
 	instanceID := fmt.Sprintf("standup-1@%d", julyEighth.Unix())
 
 	occurrenceEvent := Event{
-		ID:        instanceID,
-		Title:     "Standup",
-		Calendar:  "Work",
-		Start:     julyEighth,
-		End:       julyEighth.Add(30 * time.Minute),
-		Recurring: true,
+		ID:         instanceID,
+		Title:      "Standup",
+		Calendar:   "Work",
+		Start:      julyEighth,
+		End:        julyEighth.Add(30 * time.Minute),
+		Recurring:  true,
 		Recurrence: Recurrence{Frequency: "daily", Interval: 1},
 	}
 
@@ -867,9 +867,9 @@ func TestCaldavRecurringWrites(t *testing.T) {
 
 func TestCaldavCreateRecurringEvent(t *testing.T) {
 	cases := []struct {
-		name      string
-		event     Event
-		wantRule  string
+		name     string
+		event    Event
+		wantRule string
 	}{
 		{
 			name: "timed weekly with until",

@@ -160,6 +160,12 @@ synced. Sync and save problems open an error popup — `y` yanks the error text 
 the clipboard (via OSC 52, so it works over SSH too), any other key
 dismisses it, and further queued errors follow one at a time.
 
+Events with reminders (`VALARM`) pop up a dismissable alert when they come
+due while caltui is running. Invitation details show read-only in the event
+card: the organizer, the attendee list, and your own accept/decline state
+(matched via the account's optional `email` key, defaulting to `username`
+when that is an email address). Responding to invites is not supported yet.
+
 `c` opens the calendar list, where `space` shows or hides individual
 calendars. Hidden calendars keep syncing and stay available in the event
 form — their events are just not drawn. The hidden set is remembered in the

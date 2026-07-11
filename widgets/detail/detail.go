@@ -135,8 +135,18 @@ func (m Model) View() string {
 
 	lines = append(lines, muted.Render(calendarLine))
 
+	if m.event.Organizer != "" {
+		lines = append(lines, muted.Render("Organizer: "+m.event.Organizer))
+	}
+
 	if len(m.event.Attendees) > 0 {
 		lines = append(lines, muted.Render("Attendees: "+strings.Join(m.event.Attendees, ", ")))
+	}
+
+	if m.event.Participation != "" {
+		status := strings.ReplaceAll(strings.ToLower(m.event.Participation), "-", " ")
+
+		lines = append(lines, muted.Render("You: "+status))
 	}
 
 	if m.event.Description != "" {

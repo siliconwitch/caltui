@@ -33,6 +33,7 @@ type Model struct {
 	scopePicker  tea.Model
 	search       tea.Model
 	calendars    tea.Model
+	alertPopup   tea.Model
 	active       string
 	popup        string
 	clipboard    *calendar.Event
@@ -44,7 +45,7 @@ type Model struct {
 	lastSync     time.Time
 }
 
-func New(store calendar.Store, syncInterval time.Duration, month, week, day, agenda, form, confirm, gotoDate, detail, errorPopup, scopePicker, search, calendars tea.Model) Model {
+func New(store calendar.Store, syncInterval time.Duration, month, week, day, agenda, form, confirm, gotoDate, detail, errorPopup, scopePicker, search, calendars, alertPopup tea.Model) Model {
 	model := Model{
 		store:        store,
 		month:        month,
@@ -59,6 +60,7 @@ func New(store calendar.Store, syncInterval time.Duration, month, week, day, age
 		scopePicker:  scopePicker,
 		search:       search,
 		calendars:    calendars,
+		alertPopup:   alertPopup,
 		active:       "month",
 		syncInterval: syncInterval,
 		lastSync:     time.Now(),
@@ -85,6 +87,7 @@ func (m Model) Init() tea.Cmd {
 		m.scopePicker.Init(),
 		m.search.Init(),
 		m.calendars.Init(),
+		m.alertPopup.Init(),
 	}
 
 	commands = append(commands, m.syncCommands(calendar.SyncAutomatic)...)
@@ -164,6 +167,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "calendars":
 				calendars, cmd := m.calendars.Update(msg)
 				m.calendars = calendars
+
+				return m, cmd
+
+			case "alert":
+				alertPopup, cmd := m.alertPopup.Update(msg)
+				m.alertPopup = alertPopup
 
 				return m, cmd
 
@@ -290,6 +299,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.popup = "error"
 		}
 
+		if pending, ok := m.alertPopup.(interface{ Pending() int }); ok && m.popup == "" && pending.Pending() > 0 {
+			m.popup = "alert"
+		}
+
 		return m, nil
 
 	case msgs.GotoDateMsg:
@@ -392,7 +405,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			commands = append(commands, syncs...)
 		}
 
-		return m, tea.Batch(commands...)
+		updated, broadcastCmd := m.broadcast(msgs.ClockTickMsg{Now: time.Time(msg)})
+		commands = append(commands, broadcastCmd)
+
+		if updated.popup == "" {
+			if pending, ok := updated.alertPopup.(interface{ Pending() int }); ok && pending.Pending() > 0 {
+				updated.popup = "alert"
+			}
+		}
+
+		return updated, tea.Batch(commands...)
 
 	case msgs.SyncedMsg:
 		if m.pendingSyncs > 0 {
@@ -513,6 +535,8 @@ func (m Model) View() string {
 			popup = m.search.View()
 		case "calendars":
 			popup = m.calendars.View()
+		case "alert":
+			popup = m.alertPopup.View()
 		case "error":
 			popup = m.errorPopup.View()
 		}
@@ -621,6 +645,7 @@ func (m Model) broadcast(msg tea.Msg) (Model, tea.Cmd) {
 	m.agenda = update(m.agenda)
 	m.search = update(m.search)
 	m.calendars = update(m.calendars)
+	m.alertPopup = update(m.alertPopup)
 
 	return m, tea.Batch(cmds...)
 }

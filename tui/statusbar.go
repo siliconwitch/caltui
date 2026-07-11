@@ -25,6 +25,8 @@ func (m Model) statusBar() string {
 		source = m.search
 	case "calendars":
 		source = m.calendars
+	case "alert":
+		source = m.alertPopup
 	case "error":
 		source = m.errorPopup
 	}

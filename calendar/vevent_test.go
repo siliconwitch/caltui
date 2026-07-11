@@ -177,7 +177,7 @@ func TestEventsFromICal(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			parsed := eventsFromICal(decodeICS(t, c.body...), "Test", from, to, time.UTC)
+			parsed := eventsFromICal(decodeICS(t, c.body...), "Test", "", from, to, time.UTC)
 
 			if len(parsed) != len(c.want) {
 				t.Fatalf("want %d events, got %d: %+v", len(c.want), len(parsed), parsed)
@@ -236,7 +236,7 @@ func TestEventsFromICalAttendees(t *testing.T) {
 
 	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 
-	parsed := eventsFromICal(data, "Test", from, to, time.UTC)
+	parsed := eventsFromICal(data, "Test", "", from, to, time.UTC)
 
 	if len(parsed) != 1 {
 		t.Fatalf("want 1 event, got %d", len(parsed))
@@ -263,7 +263,7 @@ func TestDescriptionRoundTrip(t *testing.T) {
 
 	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 
-	events := eventsFromICal(data, "Work", from, to, time.UTC)
+	events := eventsFromICal(data, "Work", "", from, to, time.UTC)
 
 	if len(events) != 1 {
 		t.Fatalf("want 1 event, got %d", len(events))
@@ -271,5 +271,122 @@ func TestDescriptionRoundTrip(t *testing.T) {
 
 	if events[0].Description != "Agenda:\n1. Retro\n2. Plans" {
 		t.Fatalf("want unescaped multiline description, got %q", events[0].Description)
+	}
+}
+
+func TestAlarmParsing(t *testing.T) {
+	from := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+
+	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name string
+		body []string
+		want []time.Duration
+	}{
+		{
+			name: "relative trigger before start",
+			body: []string{
+				"BEGIN:VEVENT", "UID:one", "DTSTART:20260601T100000Z", "DTEND:20260601T110000Z",
+				"BEGIN:VALARM", "ACTION:DISPLAY", "TRIGGER:-PT15M", "END:VALARM",
+				"END:VEVENT",
+			},
+			want: []time.Duration{-15 * time.Minute},
+		},
+		{
+			name: "trigger relative to the end",
+			body: []string{
+				"BEGIN:VEVENT", "UID:one", "DTSTART:20260601T100000Z", "DTEND:20260601T110000Z",
+				"BEGIN:VALARM", "ACTION:DISPLAY", "TRIGGER;RELATED=END:PT0S", "END:VALARM",
+				"END:VEVENT",
+			},
+			want: []time.Duration{time.Hour},
+		},
+		{
+			name: "absolute date time trigger",
+			body: []string{
+				"BEGIN:VEVENT", "UID:one", "DTSTART:20260601T100000Z", "DTEND:20260601T110000Z",
+				"BEGIN:VALARM", "ACTION:DISPLAY", "TRIGGER;VALUE=DATE-TIME:20260601T093000Z", "END:VALARM",
+				"END:VEVENT",
+			},
+			want: []time.Duration{-30 * time.Minute},
+		},
+		{
+			name: "icloud default alarm skipped",
+			body: []string{
+				"BEGIN:VEVENT", "UID:one", "DTSTART:20260601T100000Z", "DTEND:20260601T110000Z",
+				"BEGIN:VALARM", "ACTION:NONE", "TRIGGER:-PT15M", "END:VALARM",
+				"END:VEVENT",
+			},
+			want: nil,
+		},
+		{
+			name: "duplicate offsets collapse",
+			body: []string{
+				"BEGIN:VEVENT", "UID:one", "DTSTART:20260601T100000Z", "DTEND:20260601T110000Z",
+				"BEGIN:VALARM", "ACTION:DISPLAY", "TRIGGER:-PT15M", "END:VALARM",
+				"BEGIN:VALARM", "ACTION:AUDIO", "TRIGGER:-PT15M", "END:VALARM",
+				"END:VEVENT",
+			},
+			want: []time.Duration{-15 * time.Minute},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			events := eventsFromICal(decodeICS(t, c.body...), "Work", "", from, to, time.UTC)
+
+			if len(events) != 1 {
+				t.Fatalf("want 1 event, got %d", len(events))
+			}
+
+			if len(events[0].Alarms) != len(c.want) {
+				t.Fatalf("want alarms %v, got %v", c.want, events[0].Alarms)
+			}
+
+			for index, offset := range c.want {
+				if events[0].Alarms[index] != offset {
+					t.Errorf("want alarm %d to be %v, got %v", index, offset, events[0].Alarms[index])
+				}
+			}
+		})
+	}
+}
+
+func TestOrganizerAndParticipation(t *testing.T) {
+	from := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+
+	to := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
+	data := decodeICS(t,
+		"BEGIN:VEVENT",
+		"UID:one",
+		"DTSTART:20260601T100000Z",
+		"DTEND:20260601T110000Z",
+		"SUMMARY:Planning",
+		"ORGANIZER;CN=Priya:MAILTO:priya@example.com",
+		"ATTENDEE;PARTSTAT=ACCEPTED;CN=Priya:mailto:priya@example.com",
+		"ATTENDEE;PARTSTAT=TENTATIVE:MAILTO:Raj@Example.com",
+		"END:VEVENT",
+	)
+
+	events := eventsFromICal(data, "Work", "raj@example.com", from, to, time.UTC)
+
+	if len(events) != 1 {
+		t.Fatalf("want 1 event, got %d", len(events))
+	}
+
+	if events[0].Organizer != "Priya" {
+		t.Errorf("want organizer Priya, got %q", events[0].Organizer)
+	}
+
+	if events[0].Participation != "TENTATIVE" {
+		t.Errorf("want the user's TENTATIVE participation, got %q", events[0].Participation)
+	}
+
+	unmatched := eventsFromICal(data, "Work", "", from, to, time.UTC)
+
+	if unmatched[0].Participation != "" {
+		t.Errorf("want no participation without a configured email, got %q", unmatched[0].Participation)
 	}
 }

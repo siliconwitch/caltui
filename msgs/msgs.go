@@ -55,6 +55,8 @@ type GotoDateMsg struct{ Date time.Time }
 
 type EventsChangedMsg struct{}
 
+type ClockTickMsg struct{ Now time.Time }
+
 type SyncedMsg struct {
 	Account string
 	Err     error

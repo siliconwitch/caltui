@@ -37,6 +37,7 @@ type caldavClient struct {
 	endpoint          *url.URL
 	wellKnownURL      string
 	location          *time.Location
+	selfEmail         string
 	calendarPaths     map[string]string
 	readOnlyCalendars map[string]bool
 	objects           map[string]caldavObject
@@ -68,10 +69,16 @@ func newCaldavClient(account Account, password string, location *time.Location) 
 		return nil, fmt.Errorf("account %q: %w", account.Name, err)
 	}
 
+	selfEmail := account.Email
+	if selfEmail == "" && strings.Contains(account.Username, "@") {
+		selfEmail = account.Username
+	}
+
 	return &caldavClient{
 		client:            client,
 		httpClient:        httpClient,
 		configuredURL:     configuredURL,
+		selfEmail:         selfEmail,
 		endpoint:          configuredURL,
 		wellKnownURL:      configuredURL.Scheme + "://" + configuredURL.Host + "/.well-known/caldav",
 		location:          location,
@@ -401,7 +408,7 @@ func (c *caldavClient) fetch(from, to time.Time) ([]Calendar, []Event, error) {
 				etag = `"` + etag + `"`
 			}
 
-			for _, parsed := range eventsFromICal(object.Data, name, from, to, c.location) {
+			for _, parsed := range eventsFromICal(object.Data, name, c.selfEmail, from, to, c.location) {
 				objects[parsed.Event.ID] = caldavObject{
 					path:           object.Path,
 					uid:            parsed.UID,

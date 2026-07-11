@@ -18,6 +18,7 @@ type Account struct {
 	Type              string `toml:"type"`
 	URL               string `toml:"url"`
 	Username          string `toml:"username"`
+	Email             string `toml:"email"`
 	CredentialCommand string `toml:"credential_command"`
 }
 

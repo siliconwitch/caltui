@@ -389,7 +389,6 @@ func TestDecorateColorOverrides(t *testing.T) {
 	}
 }
 
-
 func TestSyncRollsTheWindowForward(t *testing.T) {
 	client := &fakeClient{calendars: []Calendar{{Name: "Work"}}}
 

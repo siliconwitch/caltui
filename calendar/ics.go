@@ -12,6 +12,7 @@ import (
 
 type icsClient struct {
 	accountName string
+	selfEmail   string
 	url         string
 	httpClient  *http.Client
 	location    *time.Location
@@ -40,7 +41,7 @@ func (c *icsClient) fetch(from, to time.Time) ([]Calendar, []Event, error) {
 		name = c.accountName
 	}
 
-	parsed := eventsFromICal(data, name, from, to, c.location)
+	parsed := eventsFromICal(data, name, c.selfEmail, from, to, c.location)
 
 	events := make([]Event, 0, len(parsed))
 	for _, event := range parsed {

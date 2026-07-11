@@ -3,18 +3,21 @@ package calendar
 import "time"
 
 type Event struct {
-	ID          string
-	Title       string
-	Start       time.Time
-	End         time.Time
-	AllDay      bool
-	Location    string
-	Description string
-	Attendees   []string
-	Calendar    string
-	Color       string
-	Recurring   bool
-	Recurrence  Recurrence
+	ID            string
+	Title         string
+	Start         time.Time
+	End           time.Time
+	AllDay        bool
+	Location      string
+	Description   string
+	Attendees     []string
+	Calendar      string
+	Color         string
+	Recurring     bool
+	Recurrence    Recurrence
+	Alarms        []time.Duration
+	Organizer     string
+	Participation string
 }
 
 type Recurrence struct {

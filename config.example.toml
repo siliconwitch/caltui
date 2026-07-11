@@ -31,6 +31,10 @@ sync_interval = "15m"
 # `username` and `url` here and put them in the account's credentials.toml
 # section alongside `secret`.
 #
+# An optional `email` key names the address invitations are sent to, so your
+# own accept/decline state shows on invites. It defaults to `username` when
+# that looks like an email address.
+#
 # [[accounts]]
 # name = "fastmail"
 # type = "caldav"
