@@ -17,22 +17,39 @@ include <tunables/global>
 profile caltui /usr/local/bin/caltui {
   include <abstractions/base>
   include <abstractions/consoles>
-  include <abstractions/nameservice-strict>
   include <abstractions/ssl_certs>
 
+  # nameservice-strict ships with AppArmor >= 4.1; the explicit rules below
+  # keep DNS working where it is absent.
+  include if exists <abstractions/nameservice-strict>
+
+  /etc/resolv.conf r,
+  /etc/nsswitch.conf r,
+  /etc/hosts r,
+  /etc/services r,
+  /run/systemd/resolve/stub-resolv.conf r,
+
+  # The static binary resolves DNS itself, which needs udp alongside tcp.
   network inet stream,
   network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network netlink raw,
 
   owner @{HOME}/.config/caltui/{,**} r,
   owner @{HOME}/.local/state/caltui/{,**} r,
+  owner @{HOME}/.cache/ w,
   owner @{HOME}/.cache/caltui/{,**} rw,
 
   /etc/localtime r,
   /usr/share/zoneinfo/** r,
   /sys/kernel/mm/transparent_hugepage/hpage_pmd_size r,
 
-  # Only needed when an account sets credential_command. Reading secrets from
-  # ~/.local/state/caltui/credentials.toml instead keeps the profile exec-free.
+  # Only needed when an account sets credential_command — which both example
+  # accounts in config.example.toml do. Uncomment these (adjusting paths for
+  # your distro) or switch those accounts to credentials.toml secrets, which
+  # keeps the profile exec-free; with the rules commented out, any account
+  # using credential_command fails at startup under enforcement.
   # /{usr/,}bin/{,d,b}ash mrix,
   # /usr/bin/pass Ux,
   # /usr/bin/secret-tool Ux,
