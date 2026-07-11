@@ -26,11 +26,16 @@ type caldavServerOptions struct {
 	wellKnownWorks bool
 	queryMode      string
 	putBodies      *[]string
-	putHeaders     *[]http.Header
-	deleteHeaders  *[]http.Header
-	rejectWrites   bool
-	rejectDeletes  string
+	putHeaders         *[]http.Header
+	deleteHeaders      *[]http.Header
+	rejectWrites       bool
+	rejectDeletes      string
+	subscribedCalendar bool
 }
+
+const caldavVidaICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
+	"BEGIN:VEVENT&#13;\nUID:vida-1&#13;\nDTSTART:20260709T180000Z&#13;\nDTEND:20260709T190000Z&#13;\n" +
+	"SUMMARY:Vida class&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
 
 func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 	t.Helper()
@@ -87,7 +92,19 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 				`</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`)
 
 		case "PROPFIND /cal/raj/":
-			multistatus(w, calendarResponse("/cal/raj/work/", "Work"))
+			body := calendarResponse("/cal/raj/work/", "Work")
+
+			if opts.subscribedCalendar {
+				body += `<d:response><d:href>/cal/raj/vida/</d:href><d:propstat><d:prop>` +
+					`<d:resourcetype><d:collection/><cs:subscribed xmlns:cs="http://calendarserver.org/ns/"/></d:resourcetype>` +
+					`<d:displayname>Vida classes</d:displayname>` +
+					`</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`
+			}
+
+			multistatus(w, body)
+
+		case "REPORT /cal/raj/vida/":
+			multistatus(w, eventReport("/cal/raj/vida/vida-1.ics", caldavVidaICS))
 
 		case "PROPFIND /onlycal/":
 			multistatus(w, calendarResponse("/onlycal/", "Direct"))
@@ -926,5 +943,138 @@ func TestCaldavCreateRecurringEvent(t *testing.T) {
 				t.Fatalf("want uploaded event to contain %q, got %q", c.wantRule, putBodies)
 			}
 		})
+	}
+}
+
+func TestCaldavSubscribedCalendars(t *testing.T) {
+	server := caldavTestServer(t, caldavServerOptions{
+		wellKnownWorks:     true,
+		queryMode:          "inline",
+		subscribedCalendar: true,
+	})
+	defer server.Close()
+
+	account := Account{
+		Name:     "icloud",
+		Type:     "caldav",
+		URL:      server.URL,
+		Username: "raj@example.com",
+	}
+
+	client, err := newCaldavClient(account, "app-password", time.UTC)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	calendars, events, err := client.fetch(from, to)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(calendars) != 2 {
+		t.Fatalf("want Work and Vida classes, got %+v", calendars)
+	}
+
+	if calendars[1].Name != "Vida classes" || !calendars[1].ReadOnly {
+		t.Fatalf("want Vida classes flagged read-only, got %+v", calendars[1])
+	}
+
+	foundVida := false
+	for _, event := range events {
+		if event.Title == "Vida class" {
+			foundVida = true
+		}
+	}
+
+	if !foundVida {
+		t.Fatalf("want the subscribed calendar's events fetched, got %+v", events)
+	}
+
+	_, err = client.create(Event{Title: "Blocked", Calendar: "Vida classes", Start: from, End: from.Add(time.Hour)})
+
+	if err == nil || !strings.Contains(err.Error(), "read-only subscription") {
+		t.Fatalf("want creates into the subscription refused, got %v", err)
+	}
+}
+
+func TestCaldavCrossHostDiscovery(t *testing.T) {
+	var putBodies []string
+
+	partition := caldavTestServer(t, caldavServerOptions{
+		queryMode: "inline",
+		putBodies: &putBodies,
+	})
+	defer partition.Close()
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PROPFIND" {
+			w.WriteHeader(http.StatusNotImplemented)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/xml; charset=utf-8")
+		w.WriteHeader(http.StatusMultiStatus)
+
+		switch r.URL.Path {
+		case "/", "":
+			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>`+
+				`<d:multistatus xmlns:d="DAV:"><d:response><d:href>/</d:href><d:propstat><d:prop>`+
+				`<d:current-user-principal><d:href>/principals/raj/</d:href></d:current-user-principal>`+
+				`</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>`)
+
+		default:
+			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>`+
+				`<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">`+
+				`<d:response><d:href>/principals/raj/</d:href><d:propstat><d:prop>`+
+				`<c:calendar-home-set><d:href>`+partition.URL+`/cal/raj/</d:href></c:calendar-home-set>`+
+				`</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>`)
+		}
+	}))
+	defer gateway.Close()
+
+	account := Account{
+		Name:     "icloud",
+		Type:     "caldav",
+		URL:      gateway.URL,
+		Username: "raj@example.com",
+	}
+
+	client, err := newCaldavClient(account, "app-password", time.UTC)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	calendars, events, err := client.fetch(from, to)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(calendars) != 1 || calendars[0].Name != "Work" {
+		t.Fatalf("want the partition host's Work calendar, got %+v", calendars)
+	}
+
+	if len(events) != 1 || events[0].Title != "Offsite" {
+		t.Fatalf("want the partition host's events, got %+v", events)
+	}
+
+	if _, err := client.create(Event{Title: "Planning", Calendar: "Work", Start: from, End: from.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(putBodies) != 1 || !strings.Contains(putBodies[0], "SUMMARY:Planning") {
+		t.Fatalf("want the create PUT to land on the partition host, got %q", putBodies)
 	}
 }

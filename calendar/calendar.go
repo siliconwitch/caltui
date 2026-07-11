@@ -24,8 +24,9 @@ type Recurrence struct {
 }
 
 type Calendar struct {
-	Name  string
-	Color string
+	Name     string
+	Color    string
+	ReadOnly bool
 }
 
 type Source interface {

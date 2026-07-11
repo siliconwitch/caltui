@@ -275,7 +275,13 @@ func (r *Remote) WritableCalendars() []Calendar {
 			continue
 		}
 
-		calendars = append(calendars, account.calendars...)
+		for _, accountCalendar := range account.calendars {
+			if accountCalendar.ReadOnly {
+				continue
+			}
+
+			calendars = append(calendars, accountCalendar)
+		}
 	}
 
 	return calendars
