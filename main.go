@@ -54,7 +54,7 @@ func main() {
 	if len(accounts) == 0 {
 		store = calendar.NewMock(time.Now().In(location))
 	} else {
-		store, err = calendar.NewRemote(accounts, location, time.Now().In(location))
+		store, err = calendar.NewRemote(accounts, calendarConfig.Colors, location, time.Now().In(location))
 
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "caltui:", err)

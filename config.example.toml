@@ -2,6 +2,15 @@
 # IANA timezone name, e.g. "Europe/Stockholm". Defaults to the system timezone.
 timezone = ""
 
+# Event colors by calendar. Keys are the calendar name as shown in the TUI,
+# quoted, or "account/calendar name" when two accounts share a calendar name
+# (the qualified form wins). Values are hex colors. Calendars not listed here
+# keep their automatically assigned color.
+#
+# [calendar.colors]
+# "Personal" = "#9ECE6A"
+# "icloud/General" = "#7DCFFF"
+
 # Accounts connect caltui to real calendars. With no accounts configured,
 # caltui shows sample events. Secrets NEVER live in this file: each account
 # either runs a credential_command (its output is the secret), or reads

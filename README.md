@@ -90,6 +90,11 @@ to the default below.
 # IANA name, e.g. "Europe/Stockholm". Defaults to the system timezone.
 timezone = ""
 
+# Hex event colors by calendar name (or "account/name" when two accounts
+# share a name). Unlisted calendars keep their automatic palette color.
+# [calendar.colors]
+# "Personal" = "#9ECE6A"
+
 [monthview]
 show_week_numbers = false
 

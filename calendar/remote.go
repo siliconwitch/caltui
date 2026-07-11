@@ -42,14 +42,15 @@ type remoteAccount struct {
 }
 
 type Remote struct {
-	location   *time.Location
-	cacheDir   string
-	from, to   time.Time
-	stateMutex sync.RWMutex
-	accounts   []*remoteAccount
+	location       *time.Location
+	cacheDir       string
+	from, to       time.Time
+	colorOverrides map[string]string
+	stateMutex     sync.RWMutex
+	accounts       []*remoteAccount
 }
 
-func NewRemote(accounts []Account, location *time.Location, now time.Time) (*Remote, error) {
+func NewRemote(accounts []Account, colorOverrides map[string]string, location *time.Location, now time.Time) (*Remote, error) {
 	cacheDir, err := CacheDir()
 
 	if err != nil {
@@ -61,10 +62,11 @@ func NewRemote(accounts []Account, location *time.Location, now time.Time) (*Rem
 	}
 
 	remote := &Remote{
-		location: location,
-		cacheDir: cacheDir,
-		from:     now.AddDate(-1, 0, 0),
-		to:       now.AddDate(1, 0, 0),
+		location:       location,
+		cacheDir:       cacheDir,
+		from:           now.AddDate(-1, 0, 0),
+		to:             now.AddDate(1, 0, 0),
+		colorOverrides: colorOverrides,
 	}
 
 	seen := map[string]bool{}
@@ -360,7 +362,16 @@ func (r *Remote) accountForCalendar(name string) *remoteAccount {
 func (r *Remote) decorate(accountName string, calendars []Calendar, events []Event) ([]Calendar, []Event) {
 	colors := map[string]string{}
 	for index := range calendars {
-		if calendars[index].Color == "" {
+		override, ok := r.colorOverrides[accountName+"/"+calendars[index].Name]
+		if !ok {
+			override, ok = r.colorOverrides[calendars[index].Name]
+		}
+
+		switch {
+		case ok:
+			calendars[index].Color = override
+
+		case calendars[index].Color == "":
 			calendars[index].Color = paletteColor(accountName + "/" + calendars[index].Name)
 		}
 

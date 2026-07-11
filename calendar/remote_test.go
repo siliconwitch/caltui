@@ -262,6 +262,7 @@ func TestNewRemoteCaldavIdentityFromCredentialsFile(t *testing.T) {
 
 			_, err := NewRemote(
 				[]Account{{Name: "work", Type: "caldav"}},
+				nil,
 				time.UTC,
 				time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC),
 			)
@@ -306,6 +307,7 @@ func TestNewRemoteWithICSSubscription(t *testing.T) {
 
 	remote, err := NewRemote(
 		[]Account{{Name: "team", Type: "ics", URL: server.URL}},
+		nil,
 		time.UTC,
 		time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
 	)
@@ -334,5 +336,54 @@ func TestNewRemoteWithICSSubscription(t *testing.T) {
 
 	if _, err := remote.Add(Event{Calendar: "Team calendar"}); err == nil {
 		t.Fatal("want add to an ics subscription to fail")
+	}
+}
+
+func TestDecorateColorOverrides(t *testing.T) {
+	cases := []struct {
+		name      string
+		overrides map[string]string
+		wantColor string
+	}{
+		{
+			name:      "no override falls back to the palette",
+			overrides: nil,
+			wantColor: paletteColor("icloud/General"),
+		},
+		{
+			name:      "bare calendar name override",
+			overrides: map[string]string{"General": "#112233"},
+			wantColor: "#112233",
+		},
+		{
+			name:      "account qualified override",
+			overrides: map[string]string{"icloud/General": "#445566"},
+			wantColor: "#445566",
+		},
+		{
+			name:      "account qualified override beats bare name",
+			overrides: map[string]string{"General": "#112233", "icloud/General": "#445566"},
+			wantColor: "#445566",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			remote := &Remote{location: time.UTC, colorOverrides: c.overrides}
+
+			calendars, events := remote.decorate(
+				"icloud",
+				[]Calendar{{Name: "General"}},
+				[]Event{{ID: "one", Calendar: "General"}},
+			)
+
+			if calendars[0].Color != c.wantColor {
+				t.Errorf("want calendar color %q, got %q", c.wantColor, calendars[0].Color)
+			}
+
+			if events[0].Color != c.wantColor {
+				t.Errorf("want event color %q, got %q", c.wantColor, events[0].Color)
+			}
+		})
 	}
 }
