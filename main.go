@@ -11,6 +11,7 @@ import (
 	"github.com/siliconwitch/caltui/calendar"
 	"github.com/siliconwitch/caltui/config"
 	"github.com/siliconwitch/caltui/tui"
+	"github.com/siliconwitch/caltui/widgets/agenda"
 	"github.com/siliconwitch/caltui/widgets/confirm"
 	"github.com/siliconwitch/caltui/widgets/dayview"
 	"github.com/siliconwitch/caltui/widgets/detail"
@@ -19,6 +20,7 @@ import (
 	"github.com/siliconwitch/caltui/widgets/gotodate"
 	"github.com/siliconwitch/caltui/widgets/monthview"
 	"github.com/siliconwitch/caltui/widgets/scopepicker"
+	"github.com/siliconwitch/caltui/widgets/search"
 	"github.com/siliconwitch/caltui/widgets/weekview"
 )
 
@@ -26,6 +28,7 @@ func main() {
 	monthConfig := monthview.DefaultConfig()
 	weekConfig := weekview.DefaultConfig()
 	dayConfig := dayview.DefaultConfig()
+	agendaConfig := agenda.DefaultConfig()
 	calendarConfig := calendar.DefaultConfig()
 
 	var accounts []calendar.Account
@@ -34,6 +37,7 @@ func main() {
 		monthview.ConfigSection:  &monthConfig,
 		weekview.ConfigSection:   &weekConfig,
 		dayview.ConfigSection:    &dayConfig,
+		agenda.ConfigSection:     &agendaConfig,
 		calendar.ConfigSection:   &calendarConfig,
 		calendar.AccountsSection: &accounts,
 	})
@@ -74,12 +78,14 @@ func main() {
 		monthview.New(store, monthConfig, location),
 		weekview.New(store, weekConfig, location),
 		dayview.New(store, dayConfig, location),
+		agenda.New(store, agendaConfig, location),
 		eventform.New(calendar.WritableCalendars(store), location),
 		confirm.New(),
 		gotodate.New(),
 		detail.New(location),
 		errorpopup.New(),
 		scopepicker.New(),
+		search.New(store, location),
 	)
 
 	program := tea.NewProgram(root, tea.WithAltScreen())

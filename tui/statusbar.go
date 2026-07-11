@@ -21,6 +21,8 @@ func (m Model) statusBar() string {
 		source = m.gotoDate
 	case "scope":
 		source = m.scopePicker
+	case "search":
+		source = m.search
 	case "error":
 		source = m.errorPopup
 	}
@@ -31,12 +33,13 @@ func (m Model) statusBar() string {
 	}
 
 	if m.popup == "" {
-		viewKeys := "m/w/d"
+		viewKeys := "m/w/d/a"
 		if m.selectedEvent() != nil {
-			viewKeys = "m/w"
+			viewKeys = "m/w/a"
 		}
 
 		hints = append(hints,
+			msgs.KeyHint{Key: "/", Action: "search"},
 			msgs.KeyHint{Key: "g", Action: "go to"},
 			msgs.KeyHint{Key: viewKeys, Action: "view"},
 		)

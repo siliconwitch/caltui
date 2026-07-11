@@ -24,12 +24,14 @@ type Model struct {
 	month        tea.Model
 	week         tea.Model
 	day          tea.Model
+	agenda       tea.Model
 	form         tea.Model
 	confirm      tea.Model
 	gotoDate     tea.Model
 	detail       tea.Model
 	errorPopup   tea.Model
 	scopePicker  tea.Model
+	search       tea.Model
 	active       string
 	popup        string
 	clipboard    *calendar.Event
@@ -41,18 +43,20 @@ type Model struct {
 	lastSync     time.Time
 }
 
-func New(store calendar.Store, syncInterval time.Duration, month, week, day, form, confirm, gotoDate, detail, errorPopup, scopePicker tea.Model) Model {
+func New(store calendar.Store, syncInterval time.Duration, month, week, day, agenda, form, confirm, gotoDate, detail, errorPopup, scopePicker, search tea.Model) Model {
 	model := Model{
 		store:        store,
 		month:        month,
 		week:         week,
 		day:          day,
+		agenda:       agenda,
 		form:         form,
 		confirm:      confirm,
 		gotoDate:     gotoDate,
 		detail:       detail,
 		errorPopup:   errorPopup,
 		scopePicker:  scopePicker,
+		search:       search,
 		active:       "month",
 		syncInterval: syncInterval,
 		lastSync:     time.Now(),
@@ -70,12 +74,14 @@ func (m Model) Init() tea.Cmd {
 		m.month.Init(),
 		m.week.Init(),
 		m.day.Init(),
+		m.agenda.Init(),
 		m.form.Init(),
 		m.confirm.Init(),
 		m.gotoDate.Init(),
 		m.detail.Init(),
 		m.errorPopup.Init(),
 		m.scopePicker.Init(),
+		m.search.Init(),
 	}
 
 	commands = append(commands, m.syncCommands(calendar.SyncAutomatic)...)
@@ -146,6 +152,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				return m, cmd
 
+			case "search":
+				search, cmd := m.search.Update(msg)
+				m.search = search
+
+				return m, cmd
+
 			case "error":
 				errorPopup, cmd := m.errorPopup.Update(msg)
 				m.errorPopup = errorPopup
@@ -166,6 +178,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "w":
 			return m.switchView("week")
 
+		case "a":
+			return m.switchView("agenda")
+
 		case "d":
 			if m.selectedEvent() != nil {
 				return m.updateActive(msg)
@@ -183,6 +198,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastSync = time.Now()
 
 			return m, tea.Batch(commands...)
+
+		case "/":
+			m.popup = "search"
+
+			search, cmd := m.search.Update(msgs.OpenSearchMsg{})
+			m.search = search
+
+			return m, cmd
 
 		case "g":
 			date := time.Now()
@@ -469,6 +492,8 @@ func (m Model) View() string {
 			popup = m.gotoDate.View()
 		case "scope":
 			popup = m.scopePicker.View()
+		case "search":
+			popup = m.search.View()
 		case "error":
 			popup = m.errorPopup.View()
 		}
@@ -487,6 +512,8 @@ func (m Model) activeView() tea.Model {
 		return m.week
 	case "day":
 		return m.day
+	case "agenda":
+		return m.agenda
 	default:
 		return m.month
 	}
@@ -498,6 +525,8 @@ func (m Model) withActiveView(view tea.Model) Model {
 		m.week = view
 	case "day":
 		m.day = view
+	case "agenda":
+		m.agenda = view
 	default:
 		m.month = view
 	}
@@ -570,6 +599,8 @@ func (m Model) broadcast(msg tea.Msg) (Model, tea.Cmd) {
 	m.detail = update(m.detail)
 	m.errorPopup = update(m.errorPopup)
 	m.scopePicker = update(m.scopePicker)
+	m.agenda = update(m.agenda)
+	m.search = update(m.search)
 
 	return m, tea.Batch(cmds...)
 }

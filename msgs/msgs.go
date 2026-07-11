@@ -47,6 +47,8 @@ type PasteMsg struct{ Date time.Time }
 
 type OpenGotoMsg struct{ Date time.Time }
 
+type OpenSearchMsg struct{}
+
 type GotoDateMsg struct{ Date time.Time }
 
 type EventsChangedMsg struct{}

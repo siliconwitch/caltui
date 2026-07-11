@@ -58,3 +58,7 @@ day_end = "24:00"
 day_start = "00:00"
 # End of that window, as HH:MM. Scrolling still reaches 00:00-24:00.
 day_end = "24:00"
+
+[agenda]
+# How many days ahead the agenda view lists.
+lookahead_days = 365

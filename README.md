@@ -65,9 +65,10 @@ below), caltui shows sample events so you can explore the UI.
 
 | Key                 | Action                        |
 | ------------------- | ----------------------------- |
-| `m` `w` `d`         | Month / week / day view       |
+| `m` `w` `d` `a`     | Month / week / day / agenda   |
 | `hjkl` / arrows     | Move around                   |
 | `tab` / `shift-tab` | Select next / previous event  |
+| `/`                 | Search events                 |
 | `n`                 | New event                     |
 | `e`                 | Edit selected event           |
 | `d`                 | Delete selected event         |
@@ -108,6 +109,10 @@ day_end = "24:00"
 [dayview]
 day_start = "00:00"
 day_end = "24:00"
+
+[agenda]
+# How many days ahead the agenda view lists.
+lookahead_days = 365
 ```
 
 ## Accounts
