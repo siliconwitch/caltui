@@ -543,9 +543,6 @@ func (m Model) View() string {
 					case day.Day() == 1:
 						piece = " " + day.Format("2 Jan")
 						pieceStyle = base.Foreground(theme.Accent).Bold(true)
-
-					case day.Weekday() == time.Saturday || day.Weekday() == time.Sunday:
-						pieceStyle = base.Foreground(theme.Muted)
 					}
 
 					truncated := ansi.Truncate(piece, cellWidth, "…")
