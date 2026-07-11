@@ -25,6 +25,7 @@ type caldavObject struct {
 	uid          string
 	calendarName string
 	recurring    bool
+	etag         string
 	data         *ical.Calendar
 }
 
@@ -163,12 +164,18 @@ func (c *caldavClient) fetch(from, to time.Time) ([]Calendar, []Event, error) {
 				continue
 			}
 
+			etag := object.ETag
+			if etag != "" && !strings.HasPrefix(etag, `"`) && !strings.HasPrefix(etag, "W/") {
+				etag = `"` + etag + `"`
+			}
+
 			for _, parsed := range eventsFromICal(object.Data, name, from, to, c.location) {
 				objects[parsed.Event.ID] = caldavObject{
 					path:         object.Path,
 					uid:          parsed.UID,
 					calendarName: name,
 					recurring:    parsed.Event.Recurring,
+					etag:         etag,
 					data:         object.Data,
 				}
 				events = append(events, parsed.Event)
@@ -209,13 +216,13 @@ func (c *caldavClient) calendarObjects(ctx context.Context, calendarPath string,
 
 	objects = nil
 	for _, objectPath := range objectPaths {
-		data, err := c.downloadObject(ctx, objectPath)
+		data, etag, err := c.downloadObject(ctx, objectPath)
 
 		if err != nil {
 			return nil, fmt.Errorf("downloading %s: %w", path.Base(objectPath), err)
 		}
 
-		objects = append(objects, caldav.CalendarObject{Path: objectPath, Data: data})
+		objects = append(objects, caldav.CalendarObject{Path: objectPath, ETag: etag, Data: data})
 	}
 
 	return objects, nil
@@ -261,6 +268,7 @@ func (c *caldavClient) queryObjects(ctx context.Context, calendarPath string, fr
 			Propstat []struct {
 				Prop struct {
 					CalendarData string `xml:"calendar-data"`
+					ETag         string `xml:"getetag"`
 				} `xml:"prop"`
 			} `xml:"propstat"`
 		} `xml:"response"`
@@ -285,9 +293,14 @@ func (c *caldavClient) queryObjects(ctx context.Context, calendarPath string, fr
 		}
 
 		calendarData := ""
+		etag := ""
 		for _, propstat := range entry.Propstat {
 			if propstat.Prop.CalendarData != "" {
 				calendarData = propstat.Prop.CalendarData
+			}
+
+			if propstat.Prop.ETag != "" {
+				etag = strings.TrimSpace(propstat.Prop.ETag)
 			}
 		}
 
@@ -301,7 +314,7 @@ func (c *caldavClient) queryObjects(ctx context.Context, calendarPath string, fr
 			continue
 		}
 
-		objects = append(objects, caldav.CalendarObject{Path: parsedHref.Path, Data: parsed})
+		objects = append(objects, caldav.CalendarObject{Path: parsedHref.Path, ETag: etag, Data: parsed})
 	}
 
 	if len(objects) == 0 && len(report.Responses) > 0 {
@@ -319,11 +332,11 @@ func (c *caldavClient) objectURL(objectPath string) string {
 	return requestURL.String()
 }
 
-func (c *caldavClient) downloadObject(ctx context.Context, objectPath string) (*ical.Calendar, error) {
+func (c *caldavClient) downloadObject(ctx context.Context, objectPath string) (*ical.Calendar, string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.objectURL(objectPath), nil)
 
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	request.Header.Set("Accept", ical.MIMEType)
@@ -331,41 +344,61 @@ func (c *caldavClient) downloadObject(ctx context.Context, objectPath string) (*
 	response, err := c.httpClient.Do(request)
 
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server said %s", response.Status)
+		return nil, "", fmt.Errorf("server said %s", response.Status)
 	}
 
-	return ical.NewDecoder(response.Body).Decode()
+	data, err := ical.NewDecoder(response.Body).Decode()
+
+	if err != nil {
+		return nil, "", err
+	}
+
+	return data, response.Header.Get("ETag"), nil
 }
 
-func (c *caldavClient) uploadObject(ctx context.Context, objectPath string, data *ical.Calendar) (string, error) {
+// If-Match requires strong comparison, so weak W/ etags (Zoho) are sent
+// unconditionally rather than always failing the precondition.
+func (c *caldavClient) uploadObject(ctx context.Context, objectPath string, data *ical.Calendar, ifMatch string, refuseExisting bool) (string, string, error) {
 	var body bytes.Buffer
 
 	if err := ical.NewEncoder(&body).Encode(data); err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPut, c.objectURL(objectPath), bytes.NewReader(body.Bytes()))
 
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	request.Header.Set("Content-Type", "text/calendar; charset=utf-8")
 
+	if ifMatch != "" && !strings.HasPrefix(ifMatch, "W/") {
+		request.Header.Set("If-Match", ifMatch)
+	}
+
+	if refuseExisting {
+		request.Header.Set("If-None-Match", "*")
+	}
+
 	response, err := c.httpClient.Do(request)
 
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer response.Body.Close()
 
+	if response.StatusCode == http.StatusPreconditionFailed {
+		return "", "", fmt.Errorf("the event changed on the server: refresh and try again")
+	}
+
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return "", fmt.Errorf("server said %s", response.Status)
+		return "", "", fmt.Errorf("server said %s", response.Status)
 	}
 
 	finalPath := objectPath
@@ -377,7 +410,7 @@ func (c *caldavClient) uploadObject(ctx context.Context, objectPath string, data
 		}
 	}
 
-	return finalPath, nil
+	return finalPath, response.Header.Get("ETag"), nil
 }
 
 func (c *caldavClient) listObjectPaths(ctx context.Context, calendarPath string) ([]string, error) {
@@ -492,7 +525,7 @@ func (c *caldavClient) create(event Event) (Event, error) {
 	ctx, cancel := caldavContext()
 	defer cancel()
 
-	finalPath, err := c.uploadObject(ctx, objectPath, data)
+	finalPath, etag, err := c.uploadObject(ctx, objectPath, data, "", true)
 
 	if err != nil {
 		return Event{}, fmt.Errorf("creating event: %w", err)
@@ -504,6 +537,7 @@ func (c *caldavClient) create(event Event) (Event, error) {
 		path:         finalPath,
 		uid:          uid,
 		calendarName: event.Calendar,
+		etag:         etag,
 		data:         data,
 	}
 
@@ -553,11 +587,15 @@ func (c *caldavClient) update(event Event) error {
 	ctx, cancel := caldavContext()
 	defer cancel()
 
-	_, err := c.uploadObject(ctx, object.path, object.data)
+	finalPath, etag, err := c.uploadObject(ctx, object.path, object.data, object.etag, false)
 
 	if err != nil {
 		return fmt.Errorf("updating event: %w", err)
 	}
+
+	object.path = finalPath
+	object.etag = etag
+	c.objects[event.ID] = object
 
 	return nil
 }
@@ -575,10 +613,29 @@ func (c *caldavClient) remove(id string) error {
 	ctx, cancel := caldavContext()
 	defer cancel()
 
-	err := c.client.RemoveAll(ctx, object.path)
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.objectURL(object.path), nil)
 
 	if err != nil {
 		return fmt.Errorf("deleting event: %w", err)
+	}
+
+	if object.etag != "" && !strings.HasPrefix(object.etag, "W/") {
+		request.Header.Set("If-Match", object.etag)
+	}
+
+	response, err := c.httpClient.Do(request)
+
+	if err != nil {
+		return fmt.Errorf("deleting event: %w", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode == http.StatusPreconditionFailed {
+		return fmt.Errorf("the event changed on the server: refresh and try again")
+	}
+
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		return fmt.Errorf("deleting event: server said %s", response.Status)
 	}
 
 	delete(c.objects, id)

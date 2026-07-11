@@ -22,6 +22,9 @@ type caldavServerOptions struct {
 	wellKnownWorks bool
 	queryMode      string
 	putBodies      *[]string
+	putHeaders     *[]http.Header
+	deleteHeaders  *[]http.Header
+	rejectWrites   bool
 }
 
 func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
@@ -136,8 +139,34 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 					*opts.putBodies = append(*opts.putBodies, string(putBody))
 				}
 
+				if opts.putHeaders != nil {
+					*opts.putHeaders = append(*opts.putHeaders, r.Header.Clone())
+				}
+
+				if opts.rejectWrites {
+					w.WriteHeader(http.StatusPreconditionFailed)
+
+					return
+				}
+
 				w.Header().Set("ETag", `W/"weak-etag-like-zoho"`)
 				w.WriteHeader(http.StatusCreated)
+
+				return
+			}
+
+			if r.Method == http.MethodDelete && strings.HasPrefix(requestPath, "/cal/raj/work/") {
+				if opts.deleteHeaders != nil {
+					*opts.deleteHeaders = append(*opts.deleteHeaders, r.Header.Clone())
+				}
+
+				if opts.rejectWrites {
+					w.WriteHeader(http.StatusPreconditionFailed)
+
+					return
+				}
+
+				w.WriteHeader(http.StatusNoContent)
 
 				return
 			}
@@ -402,4 +431,146 @@ func TestApplyEventProps(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCaldavConditionalWrites(t *testing.T) {
+	fetchedEvent := Event{
+		ID:       "offsite-1",
+		Title:    "Offsite",
+		Calendar: "Work",
+		Start:    time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+		End:      time.Date(2026, 7, 7, 11, 30, 0, 0, time.UTC),
+	}
+
+	fetchAgainst := func(t *testing.T, opts caldavServerOptions) (*caldavClient, func()) {
+		t.Helper()
+
+		server := caldavTestServer(t, opts)
+
+		account := Account{
+			Name:     "work",
+			Type:     "caldav",
+			URL:      server.URL,
+			Username: "raj@example.com",
+		}
+
+		client, err := newCaldavClient(account, "app-password", time.UTC)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		if _, _, err := client.fetch(from, to); err != nil {
+			t.Fatal(err)
+		}
+
+		return client, server.Close
+	}
+
+	t.Run("update sends the strong etag as if-match", func(t *testing.T) {
+		var putHeaders []http.Header
+
+		client, close := fetchAgainst(t, caldavServerOptions{
+			wellKnownWorks: true,
+			queryMode:      "inline",
+			putHeaders:     &putHeaders,
+		})
+		defer close()
+
+		if err := client.update(fetchedEvent); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(putHeaders) != 1 || putHeaders[0].Get("If-Match") != `"etag-1"` {
+			t.Fatalf("want If-Match %q, got %+v", `"etag-1"`, putHeaders)
+		}
+
+		if putHeaders[0].Get("If-None-Match") != "" {
+			t.Fatal("want no If-None-Match on update")
+		}
+	})
+
+	t.Run("weak etag from the download fallback stays unconditional", func(t *testing.T) {
+		var putHeaders []http.Header
+
+		client, close := fetchAgainst(t, caldavServerOptions{
+			wellKnownWorks: true,
+			queryMode:      "get",
+			putHeaders:     &putHeaders,
+		})
+		defer close()
+
+		if err := client.update(fetchedEvent); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(putHeaders) != 1 || putHeaders[0].Get("If-Match") != "" {
+			t.Fatalf("want no If-Match for a weak etag, got %+v", putHeaders)
+		}
+	})
+
+	t.Run("create refuses to overwrite an existing object", func(t *testing.T) {
+		var putHeaders []http.Header
+
+		client, close := fetchAgainst(t, caldavServerOptions{
+			wellKnownWorks: true,
+			queryMode:      "inline",
+			putHeaders:     &putHeaders,
+		})
+		defer close()
+
+		if _, err := client.create(Event{Title: "Planning", Calendar: "Work", Start: fetchedEvent.Start, End: fetchedEvent.End}); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(putHeaders) != 1 || putHeaders[0].Get("If-None-Match") != "*" {
+			t.Fatalf("want If-None-Match *, got %+v", putHeaders)
+		}
+
+		if putHeaders[0].Get("If-Match") != "" {
+			t.Fatal("want no If-Match on create")
+		}
+	})
+
+	t.Run("delete sends the strong etag as if-match", func(t *testing.T) {
+		var deleteHeaders []http.Header
+
+		client, close := fetchAgainst(t, caldavServerOptions{
+			wellKnownWorks: true,
+			queryMode:      "inline",
+			deleteHeaders:  &deleteHeaders,
+		})
+		defer close()
+
+		if err := client.remove("offsite-1"); err != nil {
+			t.Fatal(err)
+		}
+
+		if len(deleteHeaders) != 1 || deleteHeaders[0].Get("If-Match") != `"etag-1"` {
+			t.Fatalf("want If-Match %q, got %+v", `"etag-1"`, deleteHeaders)
+		}
+	})
+
+	t.Run("precondition failures ask the user to refresh", func(t *testing.T) {
+		client, close := fetchAgainst(t, caldavServerOptions{
+			wellKnownWorks: true,
+			queryMode:      "inline",
+			rejectWrites:   true,
+		})
+		defer close()
+
+		err := client.update(fetchedEvent)
+
+		if err == nil || !strings.Contains(err.Error(), "refresh and try again") {
+			t.Fatalf("want a refresh-and-retry error on 412, got %v", err)
+		}
+
+		if err := client.remove("offsite-1"); err == nil || !strings.Contains(err.Error(), "refresh and try again") {
+			t.Fatalf("want a refresh-and-retry error on delete 412, got %v", err)
+		}
+	})
 }
