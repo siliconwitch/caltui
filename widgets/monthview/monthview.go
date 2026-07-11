@@ -431,9 +431,9 @@ func (m Model) View() string {
 
 	headerCells := make([]string, 0, len(weekdayNames))
 	for column, name := range weekdayNames {
-		style := mutedStyle
+		style := lipgloss.NewStyle()
 		if column == (int(today.Weekday())+6)%7 {
-			style = lipgloss.NewStyle().Foreground(theme.Accent)
+			style = style.Foreground(theme.Accent)
 		}
 
 		label := ansi.Truncate(" "+name, max(0, cellWidths[column]), "")
