@@ -69,6 +69,7 @@ below), caltui shows sample events so you can explore the UI.
 | `hjkl` / arrows     | Move around                   |
 | `tab` / `shift-tab` | Select next / previous event  |
 | `/`                 | Search events                 |
+| `c`                 | Show / hide calendars         |
 | `n`                 | New event                     |
 | `e`                 | Edit selected event           |
 | `d`                 | Delete selected event         |
@@ -159,6 +160,11 @@ refresh accepts the empty result. Events within one year either side of today ar
 synced. Sync and save problems open an error popup — `y` yanks the error text to
 the clipboard (via OSC 52, so it works over SSH too), any other key
 dismisses it, and further queued errors follow one at a time.
+
+`c` opens the calendar list, where `space` shows or hides individual
+calendars. Hidden calendars keep syncing and stay available in the event
+form — their events are just not drawn. The hidden set is remembered in the
+cache, so clearing the cache re-shows everything.
 
 Repeating events are fully editable: the form's *Repeat* field creates daily,
 weekly, monthly or yearly series (with an interval and an optional end date),

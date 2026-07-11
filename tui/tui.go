@@ -32,6 +32,7 @@ type Model struct {
 	errorPopup   tea.Model
 	scopePicker  tea.Model
 	search       tea.Model
+	calendars    tea.Model
 	active       string
 	popup        string
 	clipboard    *calendar.Event
@@ -43,7 +44,7 @@ type Model struct {
 	lastSync     time.Time
 }
 
-func New(store calendar.Store, syncInterval time.Duration, month, week, day, agenda, form, confirm, gotoDate, detail, errorPopup, scopePicker, search tea.Model) Model {
+func New(store calendar.Store, syncInterval time.Duration, month, week, day, agenda, form, confirm, gotoDate, detail, errorPopup, scopePicker, search, calendars tea.Model) Model {
 	model := Model{
 		store:        store,
 		month:        month,
@@ -57,6 +58,7 @@ func New(store calendar.Store, syncInterval time.Duration, month, week, day, age
 		errorPopup:   errorPopup,
 		scopePicker:  scopePicker,
 		search:       search,
+		calendars:    calendars,
 		active:       "month",
 		syncInterval: syncInterval,
 		lastSync:     time.Now(),
@@ -82,6 +84,7 @@ func (m Model) Init() tea.Cmd {
 		m.errorPopup.Init(),
 		m.scopePicker.Init(),
 		m.search.Init(),
+		m.calendars.Init(),
 	}
 
 	commands = append(commands, m.syncCommands(calendar.SyncAutomatic)...)
@@ -158,6 +161,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				return m, cmd
 
+			case "calendars":
+				calendars, cmd := m.calendars.Update(msg)
+				m.calendars = calendars
+
+				return m, cmd
+
 			case "error":
 				errorPopup, cmd := m.errorPopup.Update(msg)
 				m.errorPopup = errorPopup
@@ -198,6 +207,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastSync = time.Now()
 
 			return m, tea.Batch(commands...)
+
+		case "c":
+			m.popup = "calendars"
+
+			calendars, cmd := m.calendars.Update(msgs.OpenCalendarsMsg{})
+			m.calendars = calendars
+
+			return m, cmd
 
 		case "/":
 			m.popup = "search"
@@ -494,6 +511,8 @@ func (m Model) View() string {
 			popup = m.scopePicker.View()
 		case "search":
 			popup = m.search.View()
+		case "calendars":
+			popup = m.calendars.View()
 		case "error":
 			popup = m.errorPopup.View()
 		}
@@ -601,6 +620,7 @@ func (m Model) broadcast(msg tea.Msg) (Model, tea.Cmd) {
 	m.scopePicker = update(m.scopePicker)
 	m.agenda = update(m.agenda)
 	m.search = update(m.search)
+	m.calendars = update(m.calendars)
 
 	return m, tea.Batch(cmds...)
 }

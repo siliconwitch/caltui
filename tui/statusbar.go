@@ -23,6 +23,8 @@ func (m Model) statusBar() string {
 		source = m.scopePicker
 	case "search":
 		source = m.search
+	case "calendars":
+		source = m.calendars
 	case "error":
 		source = m.errorPopup
 	}

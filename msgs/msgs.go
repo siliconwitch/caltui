@@ -49,6 +49,8 @@ type OpenGotoMsg struct{ Date time.Time }
 
 type OpenSearchMsg struct{}
 
+type OpenCalendarsMsg struct{}
+
 type GotoDateMsg struct{ Date time.Time }
 
 type EventsChangedMsg struct{}

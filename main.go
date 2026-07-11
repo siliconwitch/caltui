@@ -12,6 +12,7 @@ import (
 	"github.com/siliconwitch/caltui/config"
 	"github.com/siliconwitch/caltui/tui"
 	"github.com/siliconwitch/caltui/widgets/agenda"
+	"github.com/siliconwitch/caltui/widgets/calendars"
 	"github.com/siliconwitch/caltui/widgets/confirm"
 	"github.com/siliconwitch/caltui/widgets/dayview"
 	"github.com/siliconwitch/caltui/widgets/detail"
@@ -74,18 +75,21 @@ func main() {
 		}
 	}
 
+	visible := calendar.NewVisible(store)
+
 	root := tui.New(store, syncInterval,
-		monthview.New(store, monthConfig, location),
-		weekview.New(store, weekConfig, location),
-		dayview.New(store, dayConfig, location),
-		agenda.New(store, agendaConfig, location),
+		monthview.New(visible, monthConfig, location),
+		weekview.New(visible, weekConfig, location),
+		dayview.New(visible, dayConfig, location),
+		agenda.New(visible, agendaConfig, location),
 		eventform.New(calendar.WritableCalendars(store), location),
 		confirm.New(),
 		gotodate.New(),
 		detail.New(location),
 		errorpopup.New(),
 		scopepicker.New(),
-		search.New(store, location),
+		search.New(visible, location),
+		calendars.New(visible),
 	)
 
 	program := tea.NewProgram(root, tea.WithAltScreen())
