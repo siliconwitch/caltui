@@ -17,6 +17,8 @@ func TestRefreshInterval(t *testing.T) {
 		{name: "zero disables", syncInterval: "0", want: 0},
 		{name: "empty disables", syncInterval: "", want: 0},
 		{name: "junk is reported", syncInterval: "often", wantErr: true},
+		{name: "negative is refused", syncInterval: "-15m", wantErr: true},
+		{name: "sub-minute is refused", syncInterval: "30s", wantErr: true},
 	}
 
 	for _, c := range cases {

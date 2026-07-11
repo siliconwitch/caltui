@@ -555,13 +555,24 @@ func (c *caldavClient) update(event Event) error {
 	}
 
 	if event.Calendar != object.calendarName {
-		_, err := c.create(event)
+		created, err := c.create(event)
 
 		if err != nil {
 			return err
 		}
 
-		return c.remove(event.ID)
+		if removeErr := c.remove(event.ID); removeErr != nil {
+			if rollbackErr := c.remove(created.ID); rollbackErr != nil {
+				return fmt.Errorf(
+					"moving event: a copy now exists in %q but the original could not be removed: %w",
+					event.Calendar, removeErr,
+				)
+			}
+
+			return fmt.Errorf("moving event: %w", removeErr)
+		}
+
+		return nil
 	}
 
 	var target *ical.Component

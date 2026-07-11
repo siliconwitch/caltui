@@ -150,7 +150,15 @@ func (r *Remote) AccountNames() []string {
 	return names
 }
 
-func (r *Remote) Sync(name string) error {
+type SyncTrigger int
+
+const (
+	SyncManual SyncTrigger = iota
+	SyncAutomatic
+	syncPostWrite
+)
+
+func (r *Remote) Sync(name string, trigger SyncTrigger) error {
 	account := r.accountNamed(name)
 	if account == nil {
 		return fmt.Errorf("unknown account %q", name)
@@ -174,18 +182,30 @@ func (r *Remote) Sync(name string) error {
 		return err
 	}
 
+	hadEventsInWindow := false
+
 	r.stateMutex.RLock()
-	hadEvents := len(account.events) > 0
+	for _, event := range account.events {
+		if event.End.After(from) && event.Start.Before(to) {
+			hadEventsInWindow = true
+
+			break
+		}
+	}
 	r.stateMutex.RUnlock()
 
-	if len(events) == 0 && hadEvents && !account.suspectEmpty {
-		account.suspectEmpty = true
-		account.opMutex.Unlock()
+	if len(events) == 0 && hadEventsInWindow && trigger != syncPostWrite {
+		acceptConfirmedEmpty := trigger == SyncManual && account.suspectEmpty
 
-		return fmt.Errorf(
-			"account %q suddenly reports no events, keeping the cached copy: refresh again to accept the empty calendar",
-			name,
-		)
+		if !acceptConfirmedEmpty {
+			account.suspectEmpty = true
+			account.opMutex.Unlock()
+
+			return fmt.Errorf(
+				"account %q suddenly reports no events, keeping the cached copy: refresh manually to accept the empty calendar",
+				name,
+			)
+		}
 	}
 
 	account.suspectEmpty = false
@@ -273,7 +293,7 @@ func (r *Remote) Add(event Event) (Event, error) {
 		return Event{}, err
 	}
 
-	if err := r.Sync(account.name); err != nil {
+	if err := r.Sync(account.name, syncPostWrite); err != nil {
 		return Event{}, fmt.Errorf("event saved, but refreshing failed: %w", err)
 	}
 
@@ -313,7 +333,7 @@ func (r *Remote) Update(event Event) error {
 		return err
 	}
 
-	if err := r.Sync(account.name); err != nil {
+	if err := r.Sync(account.name, syncPostWrite); err != nil {
 		return fmt.Errorf("event saved, but refreshing failed: %w", err)
 	}
 
@@ -340,7 +360,7 @@ func (r *Remote) Delete(id string) error {
 		return err
 	}
 
-	if err := r.Sync(account.name); err != nil {
+	if err := r.Sync(account.name, syncPostWrite); err != nil {
 		return fmt.Errorf("event deleted, but refreshing failed: %w", err)
 	}
 

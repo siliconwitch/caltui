@@ -13,7 +13,7 @@ import (
 
 type syncer interface {
 	AccountNames() []string
-	Sync(account string) error
+	Sync(account string, trigger calendar.SyncTrigger) error
 }
 
 type clockTickMsg time.Time
@@ -74,7 +74,7 @@ func (m Model) Init() tea.Cmd {
 		m.errorPopup.Init(),
 	}
 
-	commands = append(commands, m.syncCommands()...)
+	commands = append(commands, m.syncCommands(calendar.SyncAutomatic)...)
 
 	return tea.Batch(append(commands, clockTick())...)
 }
@@ -85,7 +85,7 @@ func clockTick() tea.Cmd {
 	})
 }
 
-func (m Model) syncCommands() []tea.Cmd {
+func (m Model) syncCommands(trigger calendar.SyncTrigger) []tea.Cmd {
 	source, ok := m.store.(syncer)
 	if !ok {
 		return nil
@@ -94,7 +94,7 @@ func (m Model) syncCommands() []tea.Cmd {
 	var commands []tea.Cmd
 	for _, name := range source.AccountNames() {
 		commands = append(commands, func() tea.Msg {
-			return msgs.SyncedMsg{Account: name, Err: source.Sync(name)}
+			return msgs.SyncedMsg{Account: name, Err: source.Sync(name, trigger)}
 		})
 	}
 
@@ -164,7 +164,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.switchView("day")
 
 		case "r":
-			commands := m.syncCommands()
+			if m.pendingSyncs > 0 {
+				return m, nil
+			}
+
+			commands := m.syncCommands(calendar.SyncManual)
 			m.pendingSyncs += len(commands)
 			m.lastSync = time.Now()
 
@@ -282,7 +286,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			time.Since(m.lastSync) >= m.syncInterval
 
 		if refreshDue {
-			syncs := m.syncCommands()
+			syncs := m.syncCommands(calendar.SyncAutomatic)
 			m.pendingSyncs += len(syncs)
 			m.lastSync = time.Now()
 			commands = append(commands, syncs...)

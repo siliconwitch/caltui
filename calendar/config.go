@@ -1,6 +1,9 @@
 package calendar
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 const ConfigSection = "calendar"
 
@@ -27,5 +30,15 @@ func (c Config) RefreshInterval() (time.Duration, error) {
 		return 0, nil
 	}
 
-	return time.ParseDuration(c.SyncInterval)
+	interval, err := time.ParseDuration(c.SyncInterval)
+
+	if err != nil {
+		return 0, err
+	}
+
+	if interval != 0 && interval < time.Minute {
+		return 0, fmt.Errorf("sync_interval %q is below the 1m minimum (use \"0\" to disable)", c.SyncInterval)
+	}
+
+	return interval, nil
 }

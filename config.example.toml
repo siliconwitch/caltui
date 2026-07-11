@@ -3,7 +3,8 @@
 timezone = ""
 
 # How often accounts refresh in the background, as a Go duration like "15m"
-# or "1h". "0" disables background refresh; startup and `r` always sync.
+# or "1h" (minimum "1m"). "0" disables background refresh; startup and `r`
+# always sync.
 sync_interval = "15m"
 
 # Event colors by calendar. Keys are the calendar name as shown in the TUI,

@@ -89,7 +89,8 @@ to the default below.
 [calendar]
 # IANA name, e.g. "Europe/Stockholm". Defaults to the system timezone.
 timezone = ""
-# How often accounts refresh in the background, e.g. "15m", "1h". "0" disables.
+# How often accounts refresh in the background, e.g. "15m", "1h".
+# Minimum "1m"; "0" disables.
 sync_interval = "15m"
 
 # Hex event colors by calendar name (or "account/name" when two accounts
@@ -147,7 +148,9 @@ credential_command = "pass show caltui/google-ics-url"
 
 Events sync on startup, on `r`, and in the background every `sync_interval`
 (when no popup is open and nothing is selected), and are cached locally so
-views open instantly and work offline. Events within one year either side of today are
+views open instantly and work offline. If an account that had events suddenly
+reports none, the cached copy is kept and an error explains; only a manual
+refresh accepts the empty result. Events within one year either side of today are
 synced. Sync and save problems open an error popup — `y` yanks the error text to
 the clipboard (via OSC 52, so it works over SSH too), any other key
 dismisses it, and further queued errors follow one at a time. Editing and deleting

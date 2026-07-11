@@ -85,7 +85,7 @@ func TestRemoteSyncDecoratesAndCaches(t *testing.T) {
 
 	remote := testRemote(t, account)
 
-	if err := remote.Sync("home"); err != nil {
+	if err := remote.Sync("home", SyncAutomatic); err != nil {
 		t.Fatal(err)
 	}
 
@@ -317,7 +317,7 @@ func TestNewRemoteWithICSSubscription(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := remote.Sync("team"); err != nil {
+	if err := remote.Sync("team", SyncAutomatic); err != nil {
 		t.Fatal(err)
 	}
 
@@ -389,7 +389,29 @@ func TestDecorateColorOverrides(t *testing.T) {
 	}
 }
 
-func TestSyncKeepsCacheOnSuddenEmptyResult(t *testing.T) {
+
+func TestSyncRollsTheWindowForward(t *testing.T) {
+	client := &fakeClient{calendars: []Calendar{{Name: "Work"}}}
+
+	account := &remoteAccount{name: "work", client: client}
+
+	remote := testRemote(t, account)
+	remote.clock = func() time.Time { return time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC) }
+
+	if err := remote.Sync("work", SyncAutomatic); err != nil {
+		t.Fatal(err)
+	}
+
+	wantFrom := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	wantTo := time.Date(2028, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	if !remote.from.Equal(wantFrom) || !remote.to.Equal(wantTo) {
+		t.Errorf("want window %v to %v, got %v to %v", wantFrom, wantTo, remote.from, remote.to)
+	}
+}
+
+func TestSyncEmptyResultGuard(t *testing.T) {
 	offsite := Event{
 		ID:       "uid-1",
 		Title:    "Offsite",
@@ -407,20 +429,24 @@ func TestSyncKeepsCacheOnSuddenEmptyResult(t *testing.T) {
 
 	remote := testRemote(t, account)
 
-	if err := remote.Sync("work"); err != nil {
+	if err := remote.Sync("work", SyncAutomatic); err != nil {
 		t.Fatal(err)
 	}
 
 	client.events = nil
 
-	err := remote.Sync("work")
+	err := remote.Sync("work", SyncAutomatic)
 
 	if err == nil || !strings.Contains(err.Error(), "keeping the cached copy") {
 		t.Fatalf("want a kept-cache error on the first empty sync, got %v", err)
 	}
 
+	if err := remote.Sync("work", SyncAutomatic); err == nil {
+		t.Fatal("want automatic refreshes to never accept the empty result")
+	}
+
 	if events := remote.Events(remote.from, remote.to); len(events) != 1 {
-		t.Fatalf("want the cached event kept after a suspect empty sync, got %+v", events)
+		t.Fatalf("want the cached event kept after suspect empty syncs, got %+v", events)
 	}
 
 	cached, readErr := os.ReadFile(remote.cachePath("work"))
@@ -429,44 +455,68 @@ func TestSyncKeepsCacheOnSuddenEmptyResult(t *testing.T) {
 		t.Fatalf("want the on-disk cache untouched, got %q (%v)", cached, readErr)
 	}
 
-	if err := remote.Sync("work"); err != nil {
+	if err := remote.Sync("work", SyncManual); err != nil {
 		t.Fatal(err)
 	}
 
 	if events := remote.Events(remote.from, remote.to); len(events) != 0 {
-		t.Fatalf("want the confirmed empty result accepted, got %+v", events)
+		t.Fatalf("want the manually confirmed empty result accepted, got %+v", events)
 	}
 
-	client.events = []Event{{ID: "uid-2", Title: "Retro", Calendar: "Work"}}
+	client.events = []Event{offsite}
 
-	if err := remote.Sync("work"); err != nil {
+	if err := remote.Sync("work", SyncAutomatic); err != nil {
 		t.Fatal(err)
 	}
 
 	client.events = nil
 
-	if err := remote.Sync("work"); err == nil {
+	if err := remote.Sync("work", SyncManual); err == nil {
 		t.Fatal("want the guard re-armed after a non-empty sync")
 	}
 }
 
-func TestSyncRollsTheWindowForward(t *testing.T) {
-	client := &fakeClient{calendars: []Calendar{{Name: "Work"}}}
+func TestSyncEmptyResultGuardExceptions(t *testing.T) {
+	offsite := Event{
+		ID:       "uid-1",
+		Title:    "Offsite",
+		Calendar: "Work",
+		Start:    time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC),
+		End:      time.Date(2026, 6, 1, 11, 0, 0, 0, time.UTC),
+	}
+
+	client := &fakeClient{
+		calendars: []Calendar{{Name: "Work"}},
+		events:    []Event{offsite},
+	}
 
 	account := &remoteAccount{name: "work", client: client}
 
 	remote := testRemote(t, account)
-	remote.clock = func() time.Time { return time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC) }
 
-	if err := remote.Sync("work"); err != nil {
+	if err := remote.Sync("work", SyncAutomatic); err != nil {
 		t.Fatal(err)
 	}
 
-	wantFrom := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	client.events = nil
 
-	wantTo := time.Date(2028, 3, 1, 12, 0, 0, 0, time.UTC)
+	if err := remote.Sync("work", syncPostWrite); err != nil {
+		t.Fatalf("want a post-write sync to accept the empty result at once, got %v", err)
+	}
 
-	if !remote.from.Equal(wantFrom) || !remote.to.Equal(wantTo) {
-		t.Errorf("want window %v to %v, got %v to %v", wantFrom, wantTo, remote.from, remote.to)
+	agedOut := offsite
+	agedOut.Start = time.Date(2020, 6, 1, 10, 0, 0, 0, time.UTC)
+	agedOut.End = time.Date(2020, 6, 1, 11, 0, 0, 0, time.UTC)
+
+	client.events = []Event{agedOut}
+
+	if err := remote.Sync("work", SyncAutomatic); err != nil {
+		t.Fatal(err)
+	}
+
+	client.events = nil
+
+	if err := remote.Sync("work", SyncAutomatic); err != nil {
+		t.Fatalf("want an empty fetch to pass when cached events sit outside the window, got %v", err)
 	}
 }

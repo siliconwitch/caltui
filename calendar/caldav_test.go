@@ -25,6 +25,7 @@ type caldavServerOptions struct {
 	putHeaders     *[]http.Header
 	deleteHeaders  *[]http.Header
 	rejectWrites   bool
+	rejectDeletes  string
 }
 
 func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
@@ -160,7 +161,11 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 					*opts.deleteHeaders = append(*opts.deleteHeaders, r.Header.Clone())
 				}
 
-				if opts.rejectWrites {
+				rejected := opts.rejectWrites ||
+					opts.rejectDeletes == "all" ||
+					(opts.rejectDeletes == "original" && strings.Contains(requestPath, "offsite-1"))
+
+				if rejected {
 					w.WriteHeader(http.StatusPreconditionFailed)
 
 					return
@@ -573,4 +578,91 @@ func TestCaldavConditionalWrites(t *testing.T) {
 			t.Fatalf("want a refresh-and-retry error on delete 412, got %v", err)
 		}
 	})
+}
+
+func TestCaldavMoveRollsBackOnFailedDelete(t *testing.T) {
+	movedEvent := Event{
+		ID:       "offsite-1",
+		Title:    "Offsite",
+		Calendar: "Personal",
+		Start:    time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC),
+		End:      time.Date(2026, 7, 7, 11, 30, 0, 0, time.UTC),
+	}
+
+	cases := []struct {
+		name        string
+		rejectMode  string
+		wantErr     string
+		wantDeletes int
+	}{
+		{
+			name:        "clean move deletes the original once",
+			rejectMode:  "",
+			wantErr:     "",
+			wantDeletes: 1,
+		},
+		{
+			name:        "failed delete rolls the copy back",
+			rejectMode:  "original",
+			wantErr:     "refresh and try again",
+			wantDeletes: 2,
+		},
+		{
+			name:        "failed rollback names the surviving copy",
+			rejectMode:  "all",
+			wantErr:     "a copy now exists",
+			wantDeletes: 2,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var deleteHeaders []http.Header
+
+			server := caldavTestServer(t, caldavServerOptions{
+				wellKnownWorks: true,
+				queryMode:      "inline",
+				deleteHeaders:  &deleteHeaders,
+				rejectDeletes:  c.rejectMode,
+			})
+			defer server.Close()
+
+			account := Account{
+				Name:     "work",
+				Type:     "caldav",
+				URL:      server.URL,
+				Username: "raj@example.com",
+			}
+
+			client, err := newCaldavClient(account, "app-password", time.UTC)
+
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+			to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+
+			if _, _, err := client.fetch(from, to); err != nil {
+				t.Fatal(err)
+			}
+
+			client.calendarPaths["Personal"] = "/cal/raj/work/"
+
+			err = client.update(movedEvent)
+
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("want error containing %q, got %v", c.wantErr, err)
+			}
+
+			if len(deleteHeaders) != c.wantDeletes {
+				t.Errorf("want %d delete requests, got %d", c.wantDeletes, len(deleteHeaders))
+			}
+		})
+	}
 }
