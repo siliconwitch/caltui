@@ -46,6 +46,7 @@ type Remote struct {
 	location       *time.Location
 	cacheDir       string
 	from, to       time.Time
+	clock          func() time.Time
 	colorOverrides map[string]string
 	stateMutex     sync.RWMutex
 	accounts       []*remoteAccount
@@ -67,6 +68,7 @@ func NewRemote(accounts []Account, colorOverrides map[string]string, location *t
 		cacheDir:       cacheDir,
 		from:           now.AddDate(-1, 0, 0),
 		to:             now.AddDate(1, 0, 0),
+		clock:          time.Now,
 		colorOverrides: colorOverrides,
 	}
 
@@ -156,7 +158,15 @@ func (r *Remote) Sync(name string) error {
 
 	account.opMutex.Lock()
 
-	calendars, events, err := account.client.fetch(r.from, r.to)
+	now := r.clock().In(r.location)
+
+	r.stateMutex.Lock()
+	r.from = now.AddDate(-1, 0, 0)
+	r.to = now.AddDate(1, 0, 0)
+	from, to := r.from, r.to
+	r.stateMutex.Unlock()
+
+	calendars, events, err := account.client.fetch(from, to)
 
 	if err != nil {
 		account.opMutex.Unlock()

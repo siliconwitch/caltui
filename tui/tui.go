@@ -16,6 +16,8 @@ type syncer interface {
 	Sync(account string) error
 }
 
+type clockTickMsg time.Time
+
 type Model struct {
 	store        calendar.Store
 	month        tea.Model
@@ -33,20 +35,24 @@ type Model struct {
 	height       int
 	pendingSyncs int
 	notice       string
+	syncInterval time.Duration
+	lastSync     time.Time
 }
 
-func New(store calendar.Store, month, week, day, form, confirm, gotoDate, detail, errorPopup tea.Model) Model {
+func New(store calendar.Store, syncInterval time.Duration, month, week, day, form, confirm, gotoDate, detail, errorPopup tea.Model) Model {
 	model := Model{
-		store:      store,
-		month:      month,
-		week:       week,
-		day:        day,
-		form:       form,
-		confirm:    confirm,
-		gotoDate:   gotoDate,
-		detail:     detail,
-		errorPopup: errorPopup,
-		active:     "month",
+		store:        store,
+		month:        month,
+		week:         week,
+		day:          day,
+		form:         form,
+		confirm:      confirm,
+		gotoDate:     gotoDate,
+		detail:       detail,
+		errorPopup:   errorPopup,
+		active:       "month",
+		syncInterval: syncInterval,
+		lastSync:     time.Now(),
 	}
 
 	if source, ok := store.(syncer); ok {
@@ -68,7 +74,15 @@ func (m Model) Init() tea.Cmd {
 		m.errorPopup.Init(),
 	}
 
-	return tea.Batch(append(commands, m.syncCommands()...)...)
+	commands = append(commands, m.syncCommands()...)
+
+	return tea.Batch(append(commands, clockTick())...)
+}
+
+func clockTick() tea.Cmd {
+	return tea.Tick(time.Minute, func(t time.Time) tea.Msg {
+		return clockTickMsg(t)
+	})
 }
 
 func (m Model) syncCommands() []tea.Cmd {
@@ -152,6 +166,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			commands := m.syncCommands()
 			m.pendingSyncs += len(commands)
+			m.lastSync = time.Now()
 
 			return m, tea.Batch(commands...)
 
@@ -256,6 +271,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			return msgs.EventsChangedMsg{}
 		}
+
+	case clockTickMsg:
+		commands := []tea.Cmd{clockTick()}
+
+		refreshDue := m.syncInterval > 0 &&
+			m.popup == "" &&
+			m.selectedEvent() == nil &&
+			m.pendingSyncs == 0 &&
+			time.Since(m.lastSync) >= m.syncInterval
+
+		if refreshDue {
+			syncs := m.syncCommands()
+			m.pendingSyncs += len(syncs)
+			m.lastSync = time.Now()
+			commands = append(commands, syncs...)
+		}
+
+		return m, tea.Batch(commands...)
 
 	case msgs.SyncedMsg:
 		if m.pendingSyncs > 0 {

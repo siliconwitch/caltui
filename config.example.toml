@@ -2,6 +2,10 @@
 # IANA timezone name, e.g. "Europe/Stockholm". Defaults to the system timezone.
 timezone = ""
 
+# How often accounts refresh in the background, as a Go duration like "15m"
+# or "1h". "0" disables background refresh; startup and `r` always sync.
+sync_interval = "15m"
+
 # Event colors by calendar. Keys are the calendar name as shown in the TUI,
 # quoted, or "account/calendar name" when two accounts share a calendar name
 # (the qualified form wins). Values are hex colors. Calendars not listed here

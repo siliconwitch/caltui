@@ -58,6 +58,7 @@ func testRemote(t *testing.T, accounts ...*remoteAccount) *Remote {
 		cacheDir: t.TempDir(),
 		from:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		to:       time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
+		clock:    func() time.Time { return time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC) },
 		accounts: accounts,
 	}
 }
@@ -446,5 +447,26 @@ func TestSyncKeepsCacheOnSuddenEmptyResult(t *testing.T) {
 
 	if err := remote.Sync("work"); err == nil {
 		t.Fatal("want the guard re-armed after a non-empty sync")
+	}
+}
+
+func TestSyncRollsTheWindowForward(t *testing.T) {
+	client := &fakeClient{calendars: []Calendar{{Name: "Work"}}}
+
+	account := &remoteAccount{name: "work", client: client}
+
+	remote := testRemote(t, account)
+	remote.clock = func() time.Time { return time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC) }
+
+	if err := remote.Sync("work"); err != nil {
+		t.Fatal(err)
+	}
+
+	wantFrom := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	wantTo := time.Date(2028, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	if !remote.from.Equal(wantFrom) || !remote.to.Equal(wantTo) {
+		t.Errorf("want window %v to %v, got %v to %v", wantFrom, wantTo, remote.from, remote.to)
 	}
 }

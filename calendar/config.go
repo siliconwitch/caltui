@@ -5,12 +5,13 @@ import "time"
 const ConfigSection = "calendar"
 
 type Config struct {
-	Timezone string            `toml:"timezone"`
-	Colors   map[string]string `toml:"colors"`
+	Timezone     string            `toml:"timezone"`
+	SyncInterval string            `toml:"sync_interval"`
+	Colors       map[string]string `toml:"colors"`
 }
 
 func DefaultConfig() Config {
-	return Config{Timezone: "", Colors: map[string]string{}}
+	return Config{Timezone: "", SyncInterval: "15m", Colors: map[string]string{}}
 }
 
 func (c Config) Location() (*time.Location, error) {
@@ -19,4 +20,12 @@ func (c Config) Location() (*time.Location, error) {
 	}
 
 	return time.LoadLocation(c.Timezone)
+}
+
+func (c Config) RefreshInterval() (time.Duration, error) {
+	if c.SyncInterval == "" {
+		return 0, nil
+	}
+
+	return time.ParseDuration(c.SyncInterval)
 }

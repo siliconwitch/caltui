@@ -49,6 +49,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	syncInterval, err := calendarConfig.RefreshInterval()
+
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "caltui: invalid sync_interval in config:", err)
+		os.Exit(1)
+	}
+
 	var store calendar.Store
 
 	if len(accounts) == 0 {
@@ -62,7 +69,7 @@ func main() {
 		}
 	}
 
-	root := tui.New(store,
+	root := tui.New(store, syncInterval,
 		monthview.New(store, monthConfig, location),
 		weekview.New(store, weekConfig, location),
 		dayview.New(store, dayConfig, location),
