@@ -1,15 +1,18 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"time"
 	_ "time/tzdata"
 
+	"github.com/BurntSushi/toml"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/siliconwitch/caltui/calendar"
-	"github.com/siliconwitch/caltui/config"
 	"github.com/siliconwitch/caltui/tui"
 	"github.com/siliconwitch/caltui/widgets/agenda"
 	"github.com/siliconwitch/caltui/widgets/alertpopup"
@@ -35,18 +38,49 @@ func main() {
 
 	var accounts []calendar.Account
 
-	err := config.Load(map[string]any{
+	sections := map[string]any{
 		monthview.ConfigSection:  &monthConfig,
 		weekview.ConfigSection:   &weekConfig,
 		dayview.ConfigSection:    &dayConfig,
 		agenda.ConfigSection:     &agendaConfig,
 		calendar.ConfigSection:   &calendarConfig,
 		calendar.AccountsSection: &accounts,
-	})
+	}
 
-	if err != nil {
+	configPath := os.Getenv("CALTUI_CONFIG")
+	if configPath == "" {
+		configDir, err := os.UserConfigDir()
+
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "caltui: reading config:", err)
+			os.Exit(1)
+		}
+
+		configPath = filepath.Join(configDir, "caltui", "config.toml")
+	}
+
+	var raw map[string]toml.Primitive
+
+	metadata, err := toml.DecodeFile(configPath, &raw)
+
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+
+	case err != nil:
 		fmt.Fprintln(os.Stderr, "caltui: reading config:", err)
 		os.Exit(1)
+	}
+
+	for name, target := range sections {
+		primitive, ok := raw[name]
+		if !ok {
+			continue
+		}
+
+		if err := metadata.PrimitiveDecode(primitive, target); err != nil {
+			fmt.Fprintln(os.Stderr, "caltui: reading config:", err)
+			os.Exit(1)
+		}
 	}
 
 	location, err := calendarConfig.Location()
@@ -68,7 +102,7 @@ func main() {
 	if len(accounts) == 0 {
 		store = calendar.NewMock(time.Now().In(location))
 	} else {
-		store, err = calendar.NewRemote(accounts, calendarConfig.Colors, location, time.Now().In(location))
+		store, err = calendar.NewRemote(accounts, calendarConfig.Colors, location)
 
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "caltui:", err)
@@ -84,11 +118,11 @@ func main() {
 		dayview.New(visible, dayConfig, location),
 		agenda.New(visible, agendaConfig, location),
 		eventform.New(calendar.WritableCalendars(store), location),
-		confirm.New(),
-		gotodate.New(),
+		confirm.Model{},
+		gotodate.Model{},
 		detail.New(location),
-		errorpopup.New(),
-		scopepicker.New(),
+		errorpopup.Model{},
+		scopepicker.Model{},
 		search.New(visible, location),
 		calendars.New(visible),
 		alertpopup.New(visible, location),

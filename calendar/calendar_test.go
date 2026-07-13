@@ -21,11 +21,11 @@ func TestRefreshInterval(t *testing.T) {
 		{name: "sub-minute is refused", syncInterval: "30s", wantErr: true},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			interval, err := Config{SyncInterval: c.syncInterval}.RefreshInterval()
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			interval, err := Config{SyncInterval: testCase.syncInterval}.RefreshInterval()
 
-			if c.wantErr {
+			if testCase.wantErr {
 				if err == nil {
 					t.Fatal("want a parse error")
 				}
@@ -37,8 +37,8 @@ func TestRefreshInterval(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if interval != c.want {
-				t.Errorf("want %v, got %v", c.want, interval)
+			if interval != testCase.want {
+				t.Errorf("want %v, got %v", testCase.want, interval)
 			}
 		})
 	}

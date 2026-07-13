@@ -16,10 +16,6 @@ type Model struct {
 	location *time.Location
 }
 
-func New() Model {
-	return Model{field: maskinput.NewDate(true), location: time.Local}
-}
-
 func (m Model) Init() tea.Cmd {
 	return nil
 }
@@ -33,33 +29,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc":
+		key := msg.String()
+
+		if key == "esc" {
 			return m, func() tea.Msg { return msgs.ClosePopupMsg{} }
-
-		case "enter":
-			return m, m.gotoCommand()
 		}
 
-		field, completed := m.field.Typed(msg.String())
-		m.field = field
-
-		if completed {
-			return m, m.gotoCommand()
+		completed := key == "enter"
+		if !completed {
+			m.field, completed = m.field.Typed(key)
 		}
 
-		return m, nil
+		if !completed {
+			return m, nil
+		}
+
+		year, month, day := m.field.Date()
+
+		date := time.Date(year, month, day, 0, 0, 0, 0, m.location)
+
+		return m, func() tea.Msg { return msgs.GotoDateMsg{Date: date} }
 	}
 
 	return m, nil
-}
-
-func (m Model) gotoCommand() tea.Cmd {
-	year, month, day := m.field.Date()
-
-	date := time.Date(year, month, day, 0, 0, 0, 0, m.location)
-
-	return func() tea.Msg { return msgs.GotoDateMsg{Date: date} }
 }
 
 func (m Model) View() string {

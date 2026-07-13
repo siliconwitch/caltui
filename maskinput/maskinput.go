@@ -114,46 +114,41 @@ func (f Field) Typed(key string) (Field, bool) {
 			return f, completed
 		}
 
-		var digitCompleted bool
+		digit := int(character - '0')
 
-		f, digitCompleted = f.typedDigit(int(character - '0'))
-		completed = completed || digitCompleted
+		if f.pendingDigits == 0 {
+			if f.resetDownstream {
+				for segment := f.focusedSegment + 1; segment < f.segmentCount; segment++ {
+					f.values[segment] = f.segmentMin(segment)
+				}
+			}
+
+			f.values[f.focusedSegment] = digit
+			f.pendingDigits = 1
+		} else {
+			f.values[f.focusedSegment] = min(f.values[f.focusedSegment]*10+digit, f.segmentMax(f.focusedSegment))
+			f.pendingDigits++
+		}
+
+		segmentFull := f.pendingDigits == f.digitCounts[f.focusedSegment] ||
+			(f.digitCounts[f.focusedSegment] == 2 && f.values[f.focusedSegment]*10 > f.segmentMax(f.focusedSegment))
+
+		if !segmentFull {
+			continue
+		}
+
+		f = f.withCommittedSegment()
+
+		if f.focusedSegment == f.segmentCount-1 {
+			completed = true
+
+			continue
+		}
+
+		f.focusedSegment++
 	}
 
 	return f, completed
-}
-
-func (f Field) typedDigit(digit int) (Field, bool) {
-	if f.pendingDigits == 0 {
-		if f.resetDownstream {
-			for segment := f.focusedSegment + 1; segment < f.segmentCount; segment++ {
-				f.values[segment] = f.segmentMin(segment)
-			}
-		}
-
-		f.values[f.focusedSegment] = digit
-		f.pendingDigits = 1
-	} else {
-		f.values[f.focusedSegment] = min(f.values[f.focusedSegment]*10+digit, f.segmentMax(f.focusedSegment))
-		f.pendingDigits++
-	}
-
-	segmentFull := f.pendingDigits == f.digitCounts[f.focusedSegment] ||
-		(f.digitCounts[f.focusedSegment] == 2 && f.values[f.focusedSegment]*10 > f.segmentMax(f.focusedSegment))
-
-	if !segmentFull {
-		return f, false
-	}
-
-	f = f.withCommittedSegment()
-
-	if f.focusedSegment == f.segmentCount-1 {
-		return f, true
-	}
-
-	f.focusedSegment++
-
-	return f, false
 }
 
 func (f Field) View() string {

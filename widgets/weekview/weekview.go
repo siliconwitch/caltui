@@ -31,6 +31,7 @@ var (
 	dangerStyle             = lipgloss.NewStyle().Foreground(theme.Danger)
 	yankedStyle             = lipgloss.NewStyle().Foreground(theme.Yank).Italic(true)
 	selectedEventForeground = lipgloss.Color("#16161E")
+	allDayForeground        = lipgloss.Color("#16161E")
 )
 
 type Config struct {
@@ -57,18 +58,15 @@ type Model struct {
 }
 
 func New(source calendar.Source, config Config, location *time.Location) Model {
-	defaults := DefaultConfig()
-
-	if _, ok := parseHalfHourRow(config.DayStart); !ok {
-		config.DayStart = defaults.DayStart
-	}
-	if _, ok := parseHalfHourRow(config.DayEnd); !ok {
-		config.DayEnd = defaults.DayEnd
+	dayStartRow, ok := parseHalfHourRow(config.DayStart)
+	if !ok {
+		dayStartRow, _ = parseHalfHourRow(DefaultConfig().DayStart)
 	}
 
-	dayStartRow, _ := parseHalfHourRow(config.DayStart)
-
-	dayEndRow, _ := parseHalfHourRow(config.DayEnd)
+	dayEndRow, ok := parseHalfHourRow(config.DayEnd)
+	if !ok {
+		dayEndRow, _ = parseHalfHourRow(DefaultConfig().DayEnd)
+	}
 
 	if dayEndRow <= dayStartRow {
 		dayStartRow = 0
@@ -83,7 +81,7 @@ func New(source calendar.Source, config Config, location *time.Location) Model {
 		dayStartRow:    dayStartRow,
 		dayEndRow:      dayEndRow,
 		weekMonday:     mondayOf(now),
-		selectedDate:   startOfDay(now),
+		selectedDate:   time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location),
 		scrollOffset:   dayStartRow,
 		selectionIndex: -1,
 	}
@@ -112,7 +110,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msgs.FocusDateMsg:
-		m.selectedDate = startOfDay(msg.Date)
+		m.selectedDate = time.Date(msg.Date.Year(), msg.Date.Month(), msg.Date.Day(), 0, 0, 0, 0, msg.Date.Location())
 		m.weekMonday = mondayOf(m.selectedDate)
 		m.selectionIndex = -1
 
@@ -157,7 +155,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "t":
-			moved, cmd := m.moveCursor(startOfDay(time.Now().In(m.location)))
+			now := time.Now().In(m.location)
+
+			moved, cmd := m.moveCursor(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, m.location))
 			moved.scrollOffset = moved.initialScroll()
 
 			return moved, cmd
@@ -219,7 +219,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			return m, func() tea.Msg { return msgs.OpenEventFormMsg{Event: template, IsNew: true} }
 
-		case "e":
+		case "e", "d", "y":
 			selected := m.SelectedEvent()
 
 			if selected == nil {
@@ -228,29 +228,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			event := *selected
 
-			return m, func() tea.Msg { return msgs.OpenEventFormMsg{Event: event, IsNew: false} }
-
-		case "d":
-			selected := m.SelectedEvent()
-
-			if selected == nil {
-				return m, nil
+			switch msg.String() {
+			case "e":
+				return m, func() tea.Msg { return msgs.OpenEventFormMsg{Event: event, IsNew: false} }
+			case "d":
+				return m, func() tea.Msg { return msgs.RequestDeleteMsg{Event: event} }
+			case "y":
+				return m, func() tea.Msg { return msgs.YankMsg{Event: event} }
 			}
 
-			event := *selected
-
-			return m, func() tea.Msg { return msgs.RequestDeleteMsg{Event: event} }
-
-		case "y":
-			selected := m.SelectedEvent()
-
-			if selected == nil {
-				return m, nil
-			}
-
-			event := *selected
-
-			return m, func() tea.Msg { return msgs.YankMsg{Event: event} }
+			return m, nil
 
 		case "p":
 			date := m.selectedDate
@@ -267,6 +254,7 @@ func (m Model) View() string {
 		return ""
 	}
 
+	// day columns
 	availableWidth := max(m.width-gutterWidth-6, 7)
 
 	baseColumnWidth := availableWidth / 7
@@ -316,18 +304,19 @@ func (m Model) View() string {
 
 		nextDay := day.AddDate(0, 0, 1)
 
-		isToday := sameDay(day, now)
+		isToday := day.Year() == now.Year() && day.YearDay() == now.YearDay()
 
 		labelStyle := lipgloss.NewStyle().Width(columnWidth).Align(lipgloss.Center)
 		if isToday {
 			labelStyle = labelStyle.Foreground(theme.Accent).Bold(true)
 		}
-		if sameDay(day, m.selectedDate) {
+		if day.Year() == m.selectedDate.Year() && day.YearDay() == m.selectedDate.YearDay() {
 			labelStyle = labelStyle.Background(theme.SelectionBg)
 		}
 
 		headerCells[dayIndex] = labelStyle.Render(ansi.Truncate(day.Format("Mon 2"), columnWidth, ""))
 
+		// timed-event lanes
 		events := m.source.Events(day, nextDay)
 
 		sort.SliceStable(events, func(i, j int) bool { return events[i].Start.Before(events[j].Start) })
@@ -379,6 +368,7 @@ func (m Model) View() string {
 			current.blocks = append(current.blocks, eventBlock{event: event, startRow: startRow, endRow: endRow, lane: lane})
 		}
 
+		// half-hour cells
 		for row := range halfHourRowCount {
 			var covering *eventCluster
 			for clusterIndex := range clusters {
@@ -486,11 +476,13 @@ func (m Model) View() string {
 
 	lines := make([]string, 0, m.height)
 
+	// header row
 	headerLine := strings.Repeat(" ", gutterWidth) + strings.Join(headerCells[:], " ")
 
 	lines = append(lines, ansi.Truncate(headerLine, m.width, ""))
 	lines = append(lines, gridStyle.Render(strings.Repeat("─", m.width)))
 
+	// all-day banner
 	bannerEvents, bannerLanes := m.bannerLayout()
 
 	selectedColumn := (int(m.selectedDate.Weekday()) + 6) % 7
@@ -516,7 +508,7 @@ func (m Model) View() string {
 
 			entry := bannerEvents[lane[column]]
 
-			runEnd := entry.lastCol
+			runEnd := entry.lastColumn
 
 			runWidth := runEnd - column
 			for spanned := column; spanned <= runEnd; spanned++ {
@@ -528,7 +520,7 @@ func (m Model) View() string {
 				piece = " ↳ " + entry.event.Title
 			}
 
-			chipStyle := lipgloss.NewStyle().Background(lipgloss.Color(entry.event.Color)).Foreground(selectedEventForeground)
+			chipStyle := lipgloss.NewStyle().Background(lipgloss.Color(entry.event.Color)).Foreground(allDayForeground)
 			if entry.event.ID == m.yankedEventID {
 				chipStyle = yankedStyle
 			}
@@ -552,6 +544,7 @@ func (m Model) View() string {
 		lines = append(lines, ansi.Truncate(banner.String(), m.width, ""))
 	}
 
+	// scrolled grid rows
 	scrollOffset := m.clampScroll(m.scrollOffset)
 
 	for rowIndex := range m.visibleRows() {
@@ -663,11 +656,11 @@ func (m Model) selectedDayEvents() []calendar.Event {
 }
 
 type bannerEvent struct {
-	event     calendar.Event
-	firstCol  int
-	lastCol   int
-	multiDay  bool
-	continued bool
+	event       calendar.Event
+	firstColumn int
+	lastColumn  int
+	multiDay    bool
+	continued   bool
 }
 
 func (m Model) bannerLayout() ([]bannerEvent, [][7]int) {
@@ -692,31 +685,31 @@ func (m Model) bannerLayout() ([]bannerEvent, [][7]int) {
 			endDay = startDay
 		}
 
-		firstCol, lastCol := 0, 6
+		firstColumn, lastColumn := 0, 6
 		for column := range 7 {
 			day := m.weekMonday.AddDate(0, 0, column)
 
 			if day.Equal(startDay) {
-				firstCol = column
+				firstColumn = column
 			}
 			if day.Equal(endDay) {
-				lastCol = column
+				lastColumn = column
 			}
 		}
 
 		bannerEvents = append(bannerEvents, bannerEvent{
-			event:     event,
-			firstCol:  firstCol,
-			lastCol:   lastCol,
-			multiDay:  endDay.After(startDay),
-			continued: startDay.Before(m.weekMonday),
+			event:       event,
+			firstColumn: firstColumn,
+			lastColumn:  lastColumn,
+			multiDay:    endDay.After(startDay),
+			continued:   startDay.Before(m.weekMonday),
 		})
 	}
 
 	sort.SliceStable(bannerEvents, func(i, j int) bool {
-		spanI := bannerEvents[i].lastCol - bannerEvents[i].firstCol
+		spanI := bannerEvents[i].lastColumn - bannerEvents[i].firstColumn
 
-		spanJ := bannerEvents[j].lastCol - bannerEvents[j].firstCol
+		spanJ := bannerEvents[j].lastColumn - bannerEvents[j].firstColumn
 
 		switch {
 		case spanI != spanJ:
@@ -735,7 +728,7 @@ func (m Model) bannerLayout() ([]bannerEvent, [][7]int) {
 
 		for laneIndex := range lanes {
 			free := true
-			for column := entry.firstCol; column <= entry.lastCol; column++ {
+			for column := entry.firstColumn; column <= entry.lastColumn; column++ {
 				if lanes[laneIndex][column] >= 0 {
 					free = false
 
@@ -755,7 +748,7 @@ func (m Model) bannerLayout() ([]bannerEvent, [][7]int) {
 			assignedLane = len(lanes) - 1
 		}
 
-		for column := entry.firstCol; column <= entry.lastCol; column++ {
+		for column := entry.firstColumn; column <= entry.lastColumn; column++ {
 			lanes[assignedLane][column] = index
 		}
 	}
@@ -770,13 +763,9 @@ func (m Model) clampScroll(offset int) int {
 }
 
 func (m Model) visibleRows() int {
-	return max(m.height-2-m.bannerRowCount(), 0)
-}
-
-func (m Model) bannerRowCount() int {
 	_, lanes := m.bannerLayout()
 
-	return len(lanes)
+	return max(m.height-2-len(lanes), 0)
 }
 
 func (m Model) initialScroll() int {
@@ -837,12 +826,4 @@ func mondayOf(date time.Time) time.Time {
 	monday := date.AddDate(0, 0, -(int(date.Weekday())+6)%7)
 
 	return time.Date(monday.Year(), monday.Month(), monday.Day(), 0, 0, 0, 0, date.Location())
-}
-
-func startOfDay(date time.Time) time.Time {
-	return time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-}
-
-func sameDay(a, b time.Time) bool {
-	return a.Year() == b.Year() && a.YearDay() == b.YearDay()
 }

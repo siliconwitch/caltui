@@ -236,6 +236,50 @@ shipped profile confines the default paths. The binary is static
 (`CGO_ENABLED=0`), timezone data is embedded, and sync errors never echo
 secret URLs.
 
+## Architecture
+
+The code is written to be read file by file, top to bottom, with as little
+jumping around as possible: each file is a self-contained unit, and units are
+wired together in exactly one place.
+
+```
+main.go             Composition root. Loads the config sections, builds the
+                    store and every widget, hands them to tui, runs the program.
+tui/tui.go          Root Bubble Tea model. Routes keys, switches views, opens
+                    popups, broadcasts messages, renders the status bar and
+                    popup overlays.
+msgs/msgs.go        The message types widgets coordinate through.
+theme/theme.go      The shared color palette.
+widgets/<name>/     One self-contained widget per package — its config, state,
+                    update logic and rendering all in a single file, plus its
+                    tests. Views: monthview, weekview, dayview, agenda. Popups:
+                    eventform, confirm, gotodate, detail, errorpopup,
+                    scopepicker, search, calendars, alertpopup.
+calendar/           Everything about calendar data:
+  calendar.go         Core types (Event, Recurrence, Calendar), the
+                      Source/Store interfaces, the [calendar] config section,
+                      the cache path.
+  account.go          The [[accounts]] config section and credential
+                      resolution — the secrets leg of the three-path split.
+  remote.go           The real store: per-account sync, the on-disk cache,
+                      color assignment, and routing writes to the right client.
+  caldav.go           The CalDAV client: discovery, fetch, writes, and
+                      recurring-event editing.
+  ics.go              The read-only ICS subscription client.
+  vevent.go           iCalendar-to-Event parsing shared by both clients.
+  visible.go          Show/hide filtering with the persisted hidden set.
+  mock.go             The sample events shown before any account is set up.
+timezone/           The timezone picker and zone-offset markers; zones.go is
+                    generated from the IANA tz database.
+maskinput/          The masked text field used for date and time entry.
+```
+
+Widgets never import `tui` and never call one another — they communicate only
+through messages, and `tui` discovers optional widget capabilities (a focused
+date, a selected event, key hints, pending popups) through small type-asserted
+interfaces. Removing a widget means deleting its directory and its wiring line
+in `main.go`.
+
 ## Contributing
 
 Contributions are welcome - open an issue or a pull request. You're welcome

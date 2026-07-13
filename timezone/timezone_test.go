@@ -25,7 +25,7 @@ func TestSearch(t *testing.T) {
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			matches := Search(testCase.query)
+			matches := search(testCase.query)
 
 			if len(matches) == 0 || matches[0].name != testCase.wantFirst {
 				got := "none"
@@ -38,29 +38,27 @@ func TestSearch(t *testing.T) {
 		})
 	}
 
-	if len(Search("")) != len(zones) {
+	if len(search("")) != len(zones) {
 		t.Fatalf("empty query must return every zone")
 	}
 }
 
 func TestMarker(t *testing.T) {
-	stockholm, err := time.LoadLocation("Europe/Stockholm")
+	locations := map[string]*time.Location{}
 
-	if err != nil {
-		t.Fatal(err)
+	for _, zoneName := range []string{"Europe/Stockholm", "America/Los_Angeles", "Europe/Berlin"} {
+		location, err := time.LoadLocation(zoneName)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		locations[zoneName] = location
 	}
 
-	losAngeles, err := time.LoadLocation("America/Los_Angeles")
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	berlin, err := time.LoadLocation("Europe/Berlin")
-
-	if err != nil {
-		t.Fatal(err)
-	}
+	stockholm := locations["Europe/Stockholm"]
+	losAngeles := locations["America/Los_Angeles"]
+	berlin := locations["Europe/Berlin"]
 
 	cases := []struct {
 		name string

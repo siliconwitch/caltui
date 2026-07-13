@@ -59,22 +59,22 @@ func TestSecret(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "credentials.toml")
 			t.Setenv("CALTUI_CREDENTIALS", path)
 
-			if c.credentialsFile != "" {
-				if err := os.WriteFile(path, []byte(c.credentialsFile), c.permissions); err != nil {
+			if testCase.credentialsFile != "" {
+				if err := os.WriteFile(path, []byte(testCase.credentialsFile), testCase.permissions); err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			secret, err := c.account.Secret()
+			secret, err := testCase.account.secret()
 
-			if c.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-					t.Fatalf("want error containing %q, got %v", c.wantErr, err)
+			if testCase.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+					t.Fatalf("want error containing %q, got %v", testCase.wantErr, err)
 				}
 
 				return
@@ -84,8 +84,8 @@ func TestSecret(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if secret != c.want {
-				t.Fatalf("want secret %q, got %q", c.want, secret)
+			if secret != testCase.want {
+				t.Fatalf("want secret %q, got %q", testCase.want, secret)
 			}
 		})
 	}
@@ -127,11 +127,11 @@ func TestValidate(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			err := c.account.Validate()
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := testCase.account.validate()
 
-			if c.wantErr == "" {
+			if testCase.wantErr == "" {
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -139,8 +139,8 @@ func TestValidate(t *testing.T) {
 				return
 			}
 
-			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Fatalf("want error containing %q, got %v", c.wantErr, err)
+			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("want error containing %q, got %v", testCase.wantErr, err)
 			}
 		})
 	}

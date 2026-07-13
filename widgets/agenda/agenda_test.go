@@ -47,12 +47,12 @@ func testEvents() []calendar.Event {
 }
 
 func testModel(events []calendar.Event) Model {
-	model := New(sourceStub{events: events}, DefaultConfig(), time.UTC)
-	model.anchorDate = time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)
-	model.width = 80
-	model.height = 20
+	var model tea.Model = New(sourceStub{events: events}, DefaultConfig(), time.UTC)
 
-	return model
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	model, _ = model.Update(msgs.FocusDateMsg{Date: time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)})
+
+	return model.(Model)
 }
 
 func TestAgendaGroupsByDay(t *testing.T) {
@@ -68,10 +68,10 @@ func TestAgendaGroupsByDay(t *testing.T) {
 		{name: "all day row", want: "all day  Conference"},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if !strings.Contains(view, c.want) {
-				t.Fatalf("want view to contain %q, got:\n%s", c.want, view)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if !strings.Contains(view, testCase.want) {
+				t.Fatalf("want view to contain %q, got:\n%s", testCase.want, view)
 			}
 		})
 	}
@@ -80,40 +80,40 @@ func TestAgendaGroupsByDay(t *testing.T) {
 func TestAgendaSelectionAndFocus(t *testing.T) {
 	model := testModel(testEvents())
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	model = updated.(Model)
-
-	if cmd == nil {
-		t.Fatal("want a selection command")
+	steps := []struct {
+		key               string
+		wantSelectedTitle string
+		wantFocusedDate   time.Time
+	}{
+		{key: "j", wantSelectedTitle: "Standup", wantFocusedDate: time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC)},
+		{key: "j", wantSelectedTitle: "Conference", wantFocusedDate: time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)},
+		{key: "j", wantSelectedTitle: "Conference", wantFocusedDate: time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)},
 	}
 
-	selected, ok := cmd().(msgs.EventSelectedMsg)
+	for _, step := range steps {
+		updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(step.key)})
+		model = updated.(Model)
 
-	if !ok || selected.Event == nil || selected.Event.Title != "Standup" {
-		t.Fatalf("want the first event selected, got %+v", selected)
+		if cmd == nil {
+			t.Fatalf("want a selection command after pressing %q", step.key)
+		}
+
+		selected, ok := cmd().(msgs.EventSelectedMsg)
+
+		if !ok || selected.Event == nil || selected.Event.Title != step.wantSelectedTitle {
+			t.Fatalf("want %q selected, got %+v", step.wantSelectedTitle, selected)
+		}
+
+		if current := model.SelectedEvent(); current == nil || current.Title != step.wantSelectedTitle {
+			t.Fatalf("want SelectedEvent %q after pressing %q, got %+v", step.wantSelectedTitle, step.key, current)
+		}
+
+		if !model.FocusedDate().Equal(step.wantFocusedDate) {
+			t.Fatalf("want focused date %v after pressing %q, got %v", step.wantFocusedDate, step.key, model.FocusedDate())
+		}
 	}
 
-	wantDay := time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC)
-
-	if !model.FocusedDate().Equal(wantDay) {
-		t.Fatalf("want focused date %v, got %v", wantDay, model.FocusedDate())
-	}
-
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	model = updated.(Model)
-
-	if selected := model.SelectedEvent(); selected == nil || selected.Title != "Conference" {
-		t.Fatalf("want the second event selected, got %+v", selected)
-	}
-
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	model = updated.(Model)
-
-	if selected := model.SelectedEvent(); selected == nil || selected.Title != "Conference" {
-		t.Fatalf("want selection clamped at the last event, got %+v", selected)
-	}
-
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	model = updated.(Model)
 
 	if model.SelectedEvent() != nil {

@@ -2,7 +2,6 @@ package calendar
 
 import (
 	"fmt"
-	"sort"
 	"time"
 )
 
@@ -169,14 +168,7 @@ func (m *Mock) Events(from, to time.Time) []Event {
 		}
 	}
 
-	sort.Slice(events, func(i, j int) bool {
-		if events[i].Start.Equal(events[j].Start) {
-			return events[i].Title < events[j].Title
-		}
-		return events[i].Start.Before(events[j].Start)
-	})
-
-	return events
+	return sortedByStart(events)
 }
 
 func (m *Mock) Add(event Event) (Event, error) {
@@ -205,9 +197,9 @@ func (m *Mock) Delete(id string) error {
 }
 
 func (m *Mock) colorFor(name string) string {
-	for _, c := range m.Calendars() {
-		if c.Name == name {
-			return c.Color
+	for _, mockCalendar := range m.Calendars() {
+		if mockCalendar.Name == name {
+			return mockCalendar.Color
 		}
 	}
 

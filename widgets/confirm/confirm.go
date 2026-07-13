@@ -17,10 +17,6 @@ type Model struct {
 	width int
 }
 
-func New() Model {
-	return Model{}
-}
-
 func (m Model) Init() tea.Cmd {
 	return nil
 }

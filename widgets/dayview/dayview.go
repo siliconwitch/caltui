@@ -247,7 +247,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			return m, func() tea.Msg { return msgs.OpenEventFormMsg{Event: template, IsNew: true} }
 
-		case "e":
+		case "e", "d", "y":
 			selected := m.SelectedEvent()
 
 			if selected == nil {
@@ -256,29 +256,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			event := *selected
 
-			return m, func() tea.Msg { return msgs.OpenEventFormMsg{Event: event, IsNew: false} }
-
-		case "d":
-			selected := m.SelectedEvent()
-
-			if selected == nil {
-				return m, nil
+			switch msg.String() {
+			case "e":
+				return m, func() tea.Msg { return msgs.OpenEventFormMsg{Event: event, IsNew: false} }
+			case "d":
+				return m, func() tea.Msg { return msgs.RequestDeleteMsg{Event: event} }
+			case "y":
+				return m, func() tea.Msg { return msgs.YankMsg{Event: event} }
 			}
 
-			event := *selected
-
-			return m, func() tea.Msg { return msgs.RequestDeleteMsg{Event: event} }
-
-		case "y":
-			selected := m.SelectedEvent()
-
-			if selected == nil {
-				return m, nil
-			}
-
-			event := *selected
-
-			return m, func() tea.Msg { return msgs.YankMsg{Event: event} }
+			return m, nil
 
 		case "p":
 			date := m.selectedDate
@@ -302,6 +289,7 @@ func (m Model) View() string {
 	gridStyle := lipgloss.NewStyle().Foreground(theme.Grid)
 	mutedStyle := lipgloss.NewStyle().Foreground(theme.Muted)
 
+	// header line
 	header := lipgloss.NewStyle().Bold(true).Render(m.selectedDate.Format("Monday 2 January 2006"))
 	if viewingToday {
 		header += "  " + lipgloss.NewStyle().Foreground(theme.Accent).Render("Today")
@@ -313,6 +301,7 @@ func (m Model) View() string {
 
 	columnWidth := max(0, m.width-gutterWidth)
 
+	// partition all-day events from timed blocks
 	type eventBlock struct {
 		event     calendar.Event
 		index     int
@@ -341,6 +330,7 @@ func (m Model) View() string {
 		blocks = append(blocks, eventBlock{event: event, index: i, startRow: startRow, endRow: endRow})
 	}
 
+	// all-day banner
 	if len(allDayEvents) > 0 {
 		var banner strings.Builder
 
@@ -367,6 +357,7 @@ func (m Model) View() string {
 		lines = append(lines, ansi.Truncate(banner.String(), m.width, "…"))
 	}
 
+	// cluster overlapping blocks and lay them out into lanes
 	type clusterRange struct{ from, to int }
 
 	var clusters []clusterRange
@@ -421,6 +412,7 @@ func (m Model) View() string {
 		}
 	}
 
+	// render the visible half-hour rows
 	nowRow := now.Hour()*2 + now.Minute()/30
 
 	for rowOffset := 0; rowOffset < m.visibleRows(); rowOffset++ {
@@ -601,7 +593,6 @@ func (m Model) eventRows(event calendar.Event) (int, int) {
 	nextDayStart := dayStart.AddDate(0, 0, 1)
 
 	localStart := event.Start.In(dayStart.Location())
-
 	localEnd := event.End.In(dayStart.Location())
 
 	startRow := 0

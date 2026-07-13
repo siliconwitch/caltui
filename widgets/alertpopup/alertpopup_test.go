@@ -29,36 +29,31 @@ func TestAlertsFireExactlyOnce(t *testing.T) {
 	}
 
 	model := New(sourceStub{events: []calendar.Event{standup}}, time.UTC)
-	model.lastCheck = eventStart.Add(-20 * time.Minute)
-	model.width = 80
 
-	beforeAlarm := eventStart.Add(-16 * time.Minute)
-
-	updated, _ := model.Update(msgs.ClockTickMsg{Now: beforeAlarm})
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80})
 	model = updated.(Model)
 
-	if model.Pending() != 0 {
-		t.Fatalf("want no alert before the trigger time, got %d", model.Pending())
+	steps := []struct {
+		tickTime    time.Time
+		wantPending int
+	}{
+		{tickTime: eventStart.Add(-20 * time.Minute), wantPending: 0},
+		{tickTime: eventStart.Add(-16 * time.Minute), wantPending: 0},
+		{tickTime: eventStart.Add(-14 * time.Minute), wantPending: 1},
+		{tickTime: eventStart.Add(-13 * time.Minute), wantPending: 1},
 	}
 
-	atAlarm := eventStart.Add(-14 * time.Minute)
+	for _, step := range steps {
+		updated, _ = model.Update(msgs.ClockTickMsg{Now: step.tickTime})
+		model = updated.(Model)
 
-	updated, _ = model.Update(msgs.ClockTickMsg{Now: atAlarm})
-	model = updated.(Model)
-
-	if model.Pending() != 1 {
-		t.Fatalf("want exactly one alert at the trigger time, got %d", model.Pending())
+		if model.Pending() != step.wantPending {
+			t.Fatalf("want %d pending alerts at %v, got %d", step.wantPending, step.tickTime, model.Pending())
+		}
 	}
 
 	if !strings.Contains(model.View(), "Standup") || !strings.Contains(model.View(), "in 14m") {
 		t.Fatalf("want the alert to name the event and lead time, got %q", model.View())
-	}
-
-	updated, _ = model.Update(msgs.ClockTickMsg{Now: atAlarm.Add(time.Minute)})
-	model = updated.(Model)
-
-	if model.Pending() != 1 {
-		t.Fatalf("want no duplicate alert on later ticks, got %d", model.Pending())
 	}
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})

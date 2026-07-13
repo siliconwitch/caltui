@@ -112,99 +112,6 @@ func (c *caldavClient) propfind(ctx context.Context, requestURL *url.URL, depth,
 	return io.ReadAll(response.Body)
 }
 
-func (c *caldavClient) findPrincipalURL(ctx context.Context, baseURL *url.URL) (*url.URL, error) {
-	requestBody := `<?xml version="1.0" encoding="utf-8"?>` +
-		`<d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>`
-
-	data, err := c.propfind(ctx, baseURL, "0", requestBody)
-
-	if err != nil {
-		return nil, fmt.Errorf("finding principal: %w", err)
-	}
-
-	var report struct {
-		Responses []struct {
-			Propstat []struct {
-				Prop struct {
-					Principal struct {
-						Href string `xml:"href"`
-					} `xml:"current-user-principal"`
-				} `xml:"prop"`
-			} `xml:"propstat"`
-		} `xml:"response"`
-	}
-
-	if err := xml.Unmarshal(data, &report); err != nil {
-		return nil, fmt.Errorf("finding principal: %w", err)
-	}
-
-	for _, entry := range report.Responses {
-		for _, propstat := range entry.Propstat {
-			href := strings.TrimSpace(propstat.Prop.Principal.Href)
-			if href == "" {
-				continue
-			}
-
-			principalURL, err := url.Parse(href)
-
-			if err != nil {
-				continue
-			}
-
-			return baseURL.ResolveReference(principalURL), nil
-		}
-	}
-
-	return nil, fmt.Errorf("finding principal: the server returned none")
-}
-
-func (c *caldavClient) findCalendarHomeURL(ctx context.Context, principalURL *url.URL) (*url.URL, error) {
-	requestBody := `<?xml version="1.0" encoding="utf-8"?>` +
-		`<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">` +
-		`<d:prop><c:calendar-home-set/></d:prop></d:propfind>`
-
-	data, err := c.propfind(ctx, principalURL, "0", requestBody)
-
-	if err != nil {
-		return nil, fmt.Errorf("finding calendar home: %w", err)
-	}
-
-	var report struct {
-		Responses []struct {
-			Propstat []struct {
-				Prop struct {
-					HomeSet struct {
-						Href string `xml:"href"`
-					} `xml:"calendar-home-set"`
-				} `xml:"prop"`
-			} `xml:"propstat"`
-		} `xml:"response"`
-	}
-
-	if err := xml.Unmarshal(data, &report); err != nil {
-		return nil, fmt.Errorf("finding calendar home: %w", err)
-	}
-
-	for _, entry := range report.Responses {
-		for _, propstat := range entry.Propstat {
-			href := strings.TrimSpace(propstat.Prop.HomeSet.Href)
-			if href == "" {
-				continue
-			}
-
-			homeURL, err := url.Parse(href)
-
-			if err != nil {
-				continue
-			}
-
-			return principalURL.ResolveReference(homeURL), nil
-		}
-	}
-
-	return nil, fmt.Errorf("finding calendar home: the server returned none")
-}
-
 func (c *caldavClient) listCalendars(ctx context.Context, homeURL *url.URL) ([]discoveredCalendar, error) {
 	requestBody := `<?xml version="1.0" encoding="utf-8"?>` +
 		`<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">` +
@@ -306,20 +213,125 @@ func (c *caldavClient) rerooted(targetURL *url.URL) error {
 	return nil
 }
 
-// The endpoint re-root is committed only after a discovery step succeeds, so
-// a failed sync never leaves object paths pointing at the wrong host.
-func (c *caldavClient) discoverCalendars(ctx context.Context) ([]discoveredCalendar, error) {
+func caldavContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 2*time.Minute)
+}
+
+func (c *caldavClient) fetch(from, to time.Time) ([]Calendar, []Event, error) {
+	ctx, cancel := caldavContext()
+	defer cancel()
+
+	// discover calendars
+	// The endpoint re-root is committed only after a discovery step succeeds, so
+	// a failed sync never leaves object paths pointing at the wrong host.
 	discoverFrom := func(baseURL *url.URL) ([]discoveredCalendar, *url.URL, error) {
-		principalURL, err := c.findPrincipalURL(ctx, baseURL)
+		// find the principal
+		principalBody := `<?xml version="1.0" encoding="utf-8"?>` +
+			`<d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>`
+
+		principalData, err := c.propfind(ctx, baseURL, "0", principalBody)
 
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("finding principal: %w", err)
 		}
 
-		homeURL, err := c.findCalendarHomeURL(ctx, principalURL)
+		var principalReport struct {
+			Responses []struct {
+				Propstat []struct {
+					Prop struct {
+						Principal struct {
+							Href string `xml:"href"`
+						} `xml:"current-user-principal"`
+					} `xml:"prop"`
+				} `xml:"propstat"`
+			} `xml:"response"`
+		}
+
+		if err := xml.Unmarshal(principalData, &principalReport); err != nil {
+			return nil, nil, fmt.Errorf("finding principal: %w", err)
+		}
+
+		var principalURL *url.URL
+		for _, entry := range principalReport.Responses {
+			for _, propstat := range entry.Propstat {
+				href := strings.TrimSpace(propstat.Prop.Principal.Href)
+				if href == "" {
+					continue
+				}
+
+				parsedHref, err := url.Parse(href)
+
+				if err != nil {
+					continue
+				}
+
+				principalURL = baseURL.ResolveReference(parsedHref)
+
+				break
+			}
+
+			if principalURL != nil {
+				break
+			}
+		}
+
+		if principalURL == nil {
+			return nil, nil, fmt.Errorf("finding principal: the server returned none")
+		}
+
+		// find the calendar home
+		homeBody := `<?xml version="1.0" encoding="utf-8"?>` +
+			`<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">` +
+			`<d:prop><c:calendar-home-set/></d:prop></d:propfind>`
+
+		homeData, err := c.propfind(ctx, principalURL, "0", homeBody)
 
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("finding calendar home: %w", err)
+		}
+
+		var homeReport struct {
+			Responses []struct {
+				Propstat []struct {
+					Prop struct {
+						HomeSet struct {
+							Href string `xml:"href"`
+						} `xml:"calendar-home-set"`
+					} `xml:"prop"`
+				} `xml:"propstat"`
+			} `xml:"response"`
+		}
+
+		if err := xml.Unmarshal(homeData, &homeReport); err != nil {
+			return nil, nil, fmt.Errorf("finding calendar home: %w", err)
+		}
+
+		var homeURL *url.URL
+		for _, entry := range homeReport.Responses {
+			for _, propstat := range entry.Propstat {
+				href := strings.TrimSpace(propstat.Prop.HomeSet.Href)
+				if href == "" {
+					continue
+				}
+
+				parsedHref, err := url.Parse(href)
+
+				if err != nil {
+					continue
+				}
+
+				homeURL = principalURL.ResolveReference(parsedHref)
+
+				break
+			}
+
+			if homeURL != nil {
+				break
+			}
+		}
+
+		if homeURL == nil {
+			return nil, nil, fmt.Errorf("finding calendar home: the server returned none")
 		}
 
 		calendars, err := c.listCalendars(ctx, homeURL)
@@ -331,38 +343,30 @@ func (c *caldavClient) discoverCalendars(ctx context.Context) ([]discoveredCalen
 		return calendars, homeURL, nil
 	}
 
-	calendars, homeURL, configuredErr := discoverFrom(c.configuredURL)
-	if configuredErr == nil {
-		return calendars, c.rerooted(homeURL)
-	}
+	serverCalendars, homeURL, configuredErr := discoverFrom(c.configuredURL)
 
-	if wellKnownURL, err := url.Parse(c.wellKnownURL); err == nil {
-		if calendars, homeURL, err := discoverFrom(wellKnownURL); err == nil {
-			return calendars, c.rerooted(homeURL)
+	if configuredErr != nil {
+		if wellKnownURL, err := url.Parse(c.wellKnownURL); err == nil {
+			if wellKnownCalendars, wellKnownHome, err := discoverFrom(wellKnownURL); err == nil {
+				serverCalendars, homeURL, configuredErr = wellKnownCalendars, wellKnownHome, nil
+			}
 		}
 	}
 
-	if calendars, err := c.listCalendars(ctx, c.configuredURL); err == nil && len(calendars) > 0 {
-		return calendars, c.rerooted(c.configuredURL)
+	if configuredErr != nil {
+		if directCalendars, err := c.listCalendars(ctx, c.configuredURL); err == nil && len(directCalendars) > 0 {
+			serverCalendars, homeURL, configuredErr = directCalendars, c.configuredURL, nil
+		}
 	}
 
-	return nil, fmt.Errorf(
-		"%w (also tried %s and treating the url as a calendar itself; try the exact CalDAV server address from your provider's calendar settings)",
-		configuredErr, c.wellKnownURL,
-	)
-}
+	if configuredErr != nil {
+		return nil, nil, fmt.Errorf(
+			"%w (also tried %s and treating the url as a calendar itself; try the exact CalDAV server address from your provider's calendar settings)",
+			configuredErr, c.wellKnownURL,
+		)
+	}
 
-func caldavContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 2*time.Minute)
-}
-
-func (c *caldavClient) fetch(from, to time.Time) ([]Calendar, []Event, error) {
-	ctx, cancel := caldavContext()
-	defer cancel()
-
-	serverCalendars, err := c.discoverCalendars(ctx)
-
-	if err != nil {
+	if err := c.rerooted(homeURL); err != nil {
 		return nil, nil, err
 	}
 
@@ -383,19 +387,215 @@ func (c *caldavClient) fetch(from, to time.Time) ([]Calendar, []Event, error) {
 			name = path.Base(serverCalendar.path)
 		}
 
-		base := name
+		baseName := name
 		for suffix := 2; calendarPaths[name] != ""; suffix++ {
-			name = fmt.Sprintf("%s (%d)", base, suffix)
+			name = fmt.Sprintf("%s (%d)", baseName, suffix)
 		}
 
 		calendarPaths[name] = serverCalendar.path
 		readOnlyCalendars[name] = serverCalendar.readOnly
 		calendars = append(calendars, Calendar{Name: name, ReadOnly: serverCalendar.readOnly})
 
-		calendarObjects, err := c.calendarObjects(ctx, serverCalendar.path, from, to)
+		// Query with a time range. iCloud answers a calendar-data request that
+		// names components explicitly (<comp name="VCALENDAR"><allcomp/>…) with
+		// hollow BEGIN:VCALENDAR/END:VCALENDAR shells, so the query must
+		// request calendar-data bare.
+		timeRange := `<c:time-range start="` + from.UTC().Format("20060102T150405Z") +
+			`" end="` + to.UTC().Format("20060102T150405Z") + `"/>`
 
-		if err != nil {
-			return nil, nil, fmt.Errorf("calendar %q: %w", name, err)
+		queryBody := `<?xml version="1.0" encoding="utf-8"?>` +
+			`<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">` +
+			`<d:prop><d:getetag/><c:calendar-data/></d:prop>` +
+			`<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT">` +
+			timeRange +
+			`</c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`
+
+		var queryData []byte
+
+		queryRequest, queryErr := http.NewRequestWithContext(ctx, "REPORT", c.objectURL(serverCalendar.path), strings.NewReader(queryBody))
+
+		if queryErr == nil {
+			queryRequest.Header.Set("Depth", "1")
+			queryRequest.Header.Set("Content-Type", "text/xml; charset=utf-8")
+
+			queryResponse, err := c.httpClient.Do(queryRequest)
+
+			switch {
+			case err != nil:
+				queryErr = err
+
+			case queryResponse.StatusCode != http.StatusMultiStatus:
+				queryResponse.Body.Close()
+				queryErr = fmt.Errorf("querying events: server said %s", queryResponse.Status)
+
+			default:
+				queryData, queryErr = io.ReadAll(queryResponse.Body)
+				queryResponse.Body.Close()
+			}
+		}
+
+		var calendarObjects []caldav.CalendarObject
+
+		if queryErr == nil {
+			var queryReport struct {
+				Responses []struct {
+					Href     string `xml:"href"`
+					Propstat []struct {
+						Prop struct {
+							CalendarData string `xml:"calendar-data"`
+							ETag         string `xml:"getetag"`
+						} `xml:"prop"`
+					} `xml:"propstat"`
+				} `xml:"response"`
+			}
+
+			if err := xml.Unmarshal(queryData, &queryReport); err != nil {
+				queryErr = fmt.Errorf("querying events: %w", err)
+				queryReport.Responses = nil
+			}
+
+			for _, entry := range queryReport.Responses {
+				parsedHref, err := url.Parse(strings.TrimSpace(entry.Href))
+
+				if err != nil {
+					continue
+				}
+
+				calendarData := ""
+				etag := ""
+				for _, propstat := range entry.Propstat {
+					if propstat.Prop.CalendarData != "" {
+						calendarData = propstat.Prop.CalendarData
+					}
+
+					if propstat.Prop.ETag != "" {
+						etag = strings.TrimSpace(propstat.Prop.ETag)
+					}
+				}
+
+				if calendarData == "" {
+					continue
+				}
+
+				parsed, err := ical.NewDecoder(strings.NewReader(calendarData)).Decode()
+
+				if err != nil || len(parsed.Children) == 0 {
+					continue
+				}
+
+				calendarObjects = append(calendarObjects, caldav.CalendarObject{Path: parsedHref.Path, ETag: etag, Data: parsed})
+			}
+
+			if queryErr == nil && len(calendarObjects) == 0 && len(queryReport.Responses) > 0 {
+				queryErr = fmt.Errorf("querying events: server returned no inline calendar data")
+			}
+		}
+
+		// Fall back to a multiget over the listed object paths.
+		if queryErr != nil {
+			listURL := *c.endpoint
+			listURL.Path = serverCalendar.path
+			listURL.RawQuery = ""
+
+			listBody := `<?xml version="1.0" encoding="utf-8"?>` +
+				`<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontenttype/></d:prop></d:propfind>`
+
+			listData, err := c.propfind(ctx, &listURL, "1", listBody)
+
+			if err != nil {
+				return nil, nil, fmt.Errorf("calendar %q: querying: %w", name, queryErr)
+			}
+
+			var listing struct {
+				Responses []struct {
+					Href     string `xml:"href"`
+					Propstat []struct {
+						Prop struct {
+							ResourceType struct {
+								Collection *struct{} `xml:"collection"`
+							} `xml:"resourcetype"`
+							ContentType string `xml:"getcontenttype"`
+						} `xml:"prop"`
+					} `xml:"propstat"`
+				} `xml:"response"`
+			}
+
+			if err := xml.Unmarshal(listData, &listing); err != nil {
+				return nil, nil, fmt.Errorf("calendar %q: querying: %w", name, queryErr)
+			}
+
+			var objectPaths []string
+			for _, entry := range listing.Responses {
+				parsedHref, err := url.Parse(strings.TrimSpace(entry.Href))
+
+				if err != nil || strings.TrimSuffix(parsedHref.Path, "/") == strings.TrimSuffix(serverCalendar.path, "/") {
+					continue
+				}
+
+				isCollection := false
+				contentType := ""
+				for _, propstat := range entry.Propstat {
+					if propstat.Prop.ResourceType.Collection != nil {
+						isCollection = true
+					}
+
+					if propstat.Prop.ContentType != "" {
+						contentType = propstat.Prop.ContentType
+					}
+				}
+
+				if isCollection || (contentType != "" && !strings.HasPrefix(contentType, ical.MIMEType)) {
+					continue
+				}
+
+				objectPaths = append(objectPaths, parsedHref.Path)
+			}
+
+			if len(objectPaths) > 0 {
+				multigetObjects, multigetErr := c.client.MultiGetCalendar(ctx, serverCalendar.path, &caldav.CalendarMultiGet{
+					Paths:       objectPaths,
+					CompRequest: caldav.CalendarCompRequest{Name: "VCALENDAR", AllProps: true, AllComps: true},
+				})
+
+				calendarObjects = multigetObjects
+
+				// Fall back to per-object downloads when multiget is unsupported.
+				if multigetErr != nil {
+					calendarObjects = nil
+					for _, objectPath := range objectPaths {
+						downloadRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, c.objectURL(objectPath), nil)
+
+						if err != nil {
+							return nil, nil, fmt.Errorf("calendar %q: downloading %s: %w", name, path.Base(objectPath), err)
+						}
+
+						downloadRequest.Header.Set("Accept", ical.MIMEType)
+
+						downloadResponse, err := c.httpClient.Do(downloadRequest)
+
+						if err != nil {
+							return nil, nil, fmt.Errorf("calendar %q: downloading %s: %w", name, path.Base(objectPath), err)
+						}
+
+						if downloadResponse.StatusCode != http.StatusOK {
+							downloadResponse.Body.Close()
+
+							return nil, nil, fmt.Errorf("calendar %q: downloading %s: server said %s", name, path.Base(objectPath), downloadResponse.Status)
+						}
+
+						downloadData, err := ical.NewDecoder(downloadResponse.Body).Decode()
+
+						downloadETag := downloadResponse.Header.Get("ETag")
+						downloadResponse.Body.Close()
+
+						if err != nil {
+							return nil, nil, fmt.Errorf("calendar %q: downloading %s: %w", name, path.Base(objectPath), err)
+						}
+
+						calendarObjects = append(calendarObjects, caldav.CalendarObject{Path: objectPath, ETag: downloadETag, Data: downloadData})
+					}
+				}
+			}
 		}
 
 		for _, object := range calendarObjects {
@@ -430,176 +630,12 @@ func (c *caldavClient) fetch(from, to time.Time) ([]Calendar, []Event, error) {
 	return calendars, events, nil
 }
 
-func (c *caldavClient) calendarObjects(ctx context.Context, calendarPath string, from, to time.Time) ([]caldav.CalendarObject, error) {
-	objects, queryErr := c.queryObjects(ctx, calendarPath, from, to)
-	if queryErr == nil {
-		return objects, nil
-	}
-
-	objectPaths, err := c.listObjectPaths(ctx, calendarPath)
-
-	if err != nil {
-		return nil, fmt.Errorf("querying: %w", queryErr)
-	}
-
-	if len(objectPaths) == 0 {
-		return nil, nil
-	}
-
-	objects, err = c.client.MultiGetCalendar(ctx, calendarPath, &caldav.CalendarMultiGet{
-		Paths:       objectPaths,
-		CompRequest: caldav.CalendarCompRequest{Name: "VCALENDAR", AllProps: true, AllComps: true},
-	})
-
-	if err == nil {
-		return objects, nil
-	}
-
-	objects = nil
-	for _, objectPath := range objectPaths {
-		data, etag, err := c.downloadObject(ctx, objectPath)
-
-		if err != nil {
-			return nil, fmt.Errorf("downloading %s: %w", path.Base(objectPath), err)
-		}
-
-		objects = append(objects, caldav.CalendarObject{Path: objectPath, ETag: etag, Data: data})
-	}
-
-	return objects, nil
-}
-
-// iCloud answers a calendar-data request that names components explicitly
-// (<comp name="VCALENDAR"><allcomp/>…) with hollow BEGIN:VCALENDAR/END:VCALENDAR
-// shells, so the query must request calendar-data bare.
-func (c *caldavClient) queryObjects(ctx context.Context, calendarPath string, from, to time.Time) ([]caldav.CalendarObject, error) {
-	timeRange := `<c:time-range start="` + from.UTC().Format("20060102T150405Z") +
-		`" end="` + to.UTC().Format("20060102T150405Z") + `"/>`
-
-	requestBody := `<?xml version="1.0" encoding="utf-8"?>` +
-		`<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">` +
-		`<d:prop><d:getetag/><c:calendar-data/></d:prop>` +
-		`<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT">` +
-		timeRange +
-		`</c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`
-
-	request, err := http.NewRequestWithContext(ctx, "REPORT", c.objectURL(calendarPath), strings.NewReader(requestBody))
-
-	if err != nil {
-		return nil, err
-	}
-
-	request.Header.Set("Depth", "1")
-	request.Header.Set("Content-Type", "text/xml; charset=utf-8")
-
-	response, err := c.httpClient.Do(request)
-
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusMultiStatus {
-		return nil, fmt.Errorf("querying events: server said %s", response.Status)
-	}
-
-	var report struct {
-		Responses []struct {
-			Href     string `xml:"href"`
-			Propstat []struct {
-				Prop struct {
-					CalendarData string `xml:"calendar-data"`
-					ETag         string `xml:"getetag"`
-				} `xml:"prop"`
-			} `xml:"propstat"`
-		} `xml:"response"`
-	}
-
-	data, err := io.ReadAll(response.Body)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if err := xml.Unmarshal(data, &report); err != nil {
-		return nil, fmt.Errorf("querying events: %w", err)
-	}
-
-	var objects []caldav.CalendarObject
-	for _, entry := range report.Responses {
-		parsedHref, err := url.Parse(strings.TrimSpace(entry.Href))
-
-		if err != nil {
-			continue
-		}
-
-		calendarData := ""
-		etag := ""
-		for _, propstat := range entry.Propstat {
-			if propstat.Prop.CalendarData != "" {
-				calendarData = propstat.Prop.CalendarData
-			}
-
-			if propstat.Prop.ETag != "" {
-				etag = strings.TrimSpace(propstat.Prop.ETag)
-			}
-		}
-
-		if calendarData == "" {
-			continue
-		}
-
-		parsed, err := ical.NewDecoder(strings.NewReader(calendarData)).Decode()
-
-		if err != nil || len(parsed.Children) == 0 {
-			continue
-		}
-
-		objects = append(objects, caldav.CalendarObject{Path: parsedHref.Path, ETag: etag, Data: parsed})
-	}
-
-	if len(objects) == 0 && len(report.Responses) > 0 {
-		return nil, fmt.Errorf("querying events: server returned no inline calendar data")
-	}
-
-	return objects, nil
-}
-
 func (c *caldavClient) objectURL(objectPath string) string {
 	requestURL := *c.endpoint
 	requestURL.Path = objectPath
 	requestURL.RawQuery = ""
 
 	return requestURL.String()
-}
-
-func (c *caldavClient) downloadObject(ctx context.Context, objectPath string) (*ical.Calendar, string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.objectURL(objectPath), nil)
-
-	if err != nil {
-		return nil, "", err
-	}
-
-	request.Header.Set("Accept", ical.MIMEType)
-
-	response, err := c.httpClient.Do(request)
-
-	if err != nil {
-		return nil, "", err
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("server said %s", response.Status)
-	}
-
-	data, err := ical.NewDecoder(response.Body).Decode()
-
-	if err != nil {
-		return nil, "", err
-	}
-
-	return data, response.Header.Get("ETag"), nil
 }
 
 // If-Match requires strong comparison, so weak W/ etags (Zoho) are sent
@@ -662,96 +698,14 @@ func (c *caldavClient) uploadObject(ctx context.Context, objectPath string, data
 	return finalPath, response.Header.Get("ETag"), nil
 }
 
-func (c *caldavClient) listObjectPaths(ctx context.Context, calendarPath string) ([]string, error) {
-	requestURL := *c.endpoint
-	requestURL.Path = calendarPath
-	requestURL.RawQuery = ""
-
-	requestBody := `<?xml version="1.0" encoding="utf-8"?>` +
-		`<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontenttype/></d:prop></d:propfind>`
-
-	request, err := http.NewRequestWithContext(ctx, "PROPFIND", requestURL.String(), strings.NewReader(requestBody))
-
-	if err != nil {
-		return nil, err
-	}
-
-	request.Header.Set("Depth", "1")
-	request.Header.Set("Content-Type", "text/xml; charset=utf-8")
-
-	response, err := c.httpClient.Do(request)
-
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusMultiStatus {
-		return nil, fmt.Errorf("listing events: server said %s", response.Status)
-	}
-
-	var listing struct {
-		Responses []struct {
-			Href     string `xml:"href"`
-			Propstat []struct {
-				Prop struct {
-					ResourceType struct {
-						Collection *struct{} `xml:"collection"`
-					} `xml:"resourcetype"`
-					ContentType string `xml:"getcontenttype"`
-				} `xml:"prop"`
-			} `xml:"propstat"`
-		} `xml:"response"`
-	}
-
-	data, err := io.ReadAll(response.Body)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if err := xml.Unmarshal(data, &listing); err != nil {
-		return nil, fmt.Errorf("listing events: %w", err)
-	}
-
-	var objectPaths []string
-	for _, entry := range listing.Responses {
-		parsedHref, err := url.Parse(strings.TrimSpace(entry.Href))
-
-		if err != nil || strings.TrimSuffix(parsedHref.Path, "/") == strings.TrimSuffix(calendarPath, "/") {
-			continue
-		}
-
-		isCollection := false
-		contentType := ""
-		for _, propstat := range entry.Propstat {
-			if propstat.Prop.ResourceType.Collection != nil {
-				isCollection = true
-			}
-
-			if propstat.Prop.ContentType != "" {
-				contentType = propstat.Prop.ContentType
-			}
-		}
-
-		if isCollection || (contentType != "" && !strings.HasPrefix(contentType, ical.MIMEType)) {
-			continue
-		}
-
-		objectPaths = append(objectPaths, parsedHref.Path)
-	}
-
-	return objectPaths, nil
-}
-
 func (c *caldavClient) create(event Event) (Event, error) {
 	collectionPath, ok := c.calendarPaths[event.Calendar]
 	if !ok {
 		return Event{}, fmt.Errorf("unknown calendar %q", event.Calendar)
 	}
 
-	if err := c.refuseReadOnly(event.Calendar); err != nil {
-		return Event{}, err
+	if c.readOnlyCalendars[event.Calendar] {
+		return Event{}, fmt.Errorf("calendar %q is a read-only subscription", event.Calendar)
 	}
 
 	uidBytes := make([]byte, 16)
@@ -803,8 +757,8 @@ func (c *caldavClient) update(event Event) error {
 		return fmt.Errorf("event not found on the server: refresh and try again")
 	}
 
-	if err := c.refuseReadOnly(object.calendarName); err != nil {
-		return err
+	if c.readOnlyCalendars[object.calendarName] {
+		return fmt.Errorf("calendar %q is a read-only subscription", object.calendarName)
 	}
 
 	if object.recurring {
@@ -855,28 +809,6 @@ func (c *caldavClient) update(event Event) error {
 	return nil
 }
 
-func (c *caldavClient) refuseReadOnly(calendarName string) error {
-	if c.readOnlyCalendars[calendarName] {
-		return fmt.Errorf("calendar %q is a read-only subscription", calendarName)
-	}
-
-	return nil
-}
-
-func ruleBeyondCaltui(rule string) bool {
-	for _, part := range []string{
-		"BYDAY=", "COUNT=", "BYMONTHDAY=", "BYSETPOS=", "BYWEEKNO=",
-		"BYYEARDAY=", "BYMONTH=", "BYHOUR=", "BYMINUTE=", "WKST=",
-		"FREQ=SECONDLY", "FREQ=MINUTELY", "FREQ=HOURLY",
-	} {
-		if strings.Contains(rule, part) {
-			return true
-		}
-	}
-
-	return false
-}
-
 func masterChild(data *ical.Calendar, uid string) *ical.Component {
 	for _, child := range data.Children {
 		if child.Name != ical.CompEvent {
@@ -913,8 +845,8 @@ func (c *caldavClient) updateOccurrence(event Event) error {
 		return fmt.Errorf("event not found on the server: refresh and try again")
 	}
 
-	if err := c.refuseReadOnly(object.calendarName); err != nil {
-		return err
+	if c.readOnlyCalendars[object.calendarName] {
+		return fmt.Errorf("calendar %q is a read-only subscription", object.calendarName)
 	}
 
 	if event.Calendar != object.calendarName {
@@ -991,8 +923,8 @@ func (c *caldavClient) removeOccurrence(id string) error {
 		return fmt.Errorf("event not found on the server: refresh and try again")
 	}
 
-	if err := c.refuseReadOnly(object.calendarName); err != nil {
-		return err
+	if c.readOnlyCalendars[object.calendarName] {
+		return fmt.Errorf("calendar %q is a read-only subscription", object.calendarName)
 	}
 
 	master := masterChild(object.data, object.uid)
@@ -1038,8 +970,8 @@ func (c *caldavClient) updateSeries(event Event) error {
 		return fmt.Errorf("event not found on the server: refresh and try again")
 	}
 
-	if err := c.refuseReadOnly(object.calendarName); err != nil {
-		return err
+	if c.readOnlyCalendars[object.calendarName] {
+		return fmt.Errorf("calendar %q is a read-only subscription", object.calendarName)
 	}
 
 	if event.Calendar != object.calendarName {
@@ -1065,28 +997,21 @@ func (c *caldavClient) updateSeries(event Event) error {
 
 	ruleProp := master.Props.Get(ical.PropRecurrenceRule)
 
-	specTouched := false
-	if ruleProp != nil {
-		existing := recurrenceSpec(master.Props)
+	specTouched := ruleProp != nil &&
+		!recurrenceSpec(master.Props).SameSpec(event.Recurrence, event.Start.Location())
 
-		sameUntilDay := existing.Until.IsZero() == event.Recurrence.Until.IsZero()
-		if !existing.Until.IsZero() && !event.Recurrence.Until.IsZero() {
-			zone := event.Start.Location()
-
-			existingYear, existingMonth, existingDay := existing.Until.In(zone).Date()
-
-			untilYear, untilMonth, untilDay := event.Recurrence.Until.In(zone).Date()
-
-			sameUntilDay = existingYear == untilYear && existingMonth == untilMonth && existingDay == untilDay
+	if ruleProp != nil && (specTouched || masterAllDay != event.AllDay) {
+		rulePartsBeyondCaltui := []string{
+			"BYDAY=", "COUNT=", "BYMONTHDAY=", "BYSETPOS=", "BYWEEKNO=",
+			"BYYEARDAY=", "BYMONTH=", "BYHOUR=", "BYMINUTE=", "WKST=",
+			"FREQ=SECONDLY", "FREQ=MINUTELY", "FREQ=HOURLY",
 		}
 
-		specTouched = existing.Frequency != event.Recurrence.Frequency ||
-			max(existing.Interval, 1) != max(event.Recurrence.Interval, 1) ||
-			!sameUntilDay
-	}
-
-	if ruleProp != nil && (specTouched || masterAllDay != event.AllDay) && ruleBeyondCaltui(ruleProp.Value) {
-		return fmt.Errorf("this series repeats with rules caltui cannot edit; change it in the app that created it")
+		for _, part := range rulePartsBeyondCaltui {
+			if strings.Contains(ruleProp.Value, part) {
+				return fmt.Errorf("this series repeats with rules caltui cannot edit; change it in the app that created it")
+			}
+		}
 	}
 
 	// The user's date fields are ignored for a whole series: only the time of
@@ -1164,8 +1089,8 @@ func (c *caldavClient) removeSeries(id string) error {
 		return fmt.Errorf("event not found on the server: refresh and try again")
 	}
 
-	if err := c.refuseReadOnly(object.calendarName); err != nil {
-		return err
+	if c.readOnlyCalendars[object.calendarName] {
+		return fmt.Errorf("calendar %q is a read-only subscription", object.calendarName)
 	}
 
 	return c.removeObject(object, id)
@@ -1177,8 +1102,8 @@ func (c *caldavClient) remove(id string) error {
 		return fmt.Errorf("event not found on the server: refresh and try again")
 	}
 
-	if err := c.refuseReadOnly(object.calendarName); err != nil {
-		return err
+	if c.readOnlyCalendars[object.calendarName] {
+		return fmt.Errorf("calendar %q is a read-only subscription", object.calendarName)
 	}
 
 	if object.recurring {
@@ -1270,23 +1195,7 @@ func applyEventProps(icalEvent *ical.Event, event Event) {
 		return
 	}
 
-	existing := recurrenceSpec(icalEvent.Props)
-
-	sameUntil := existing.Until.IsZero() == event.Recurrence.Until.IsZero()
-	if !existing.Until.IsZero() && !event.Recurrence.Until.IsZero() {
-		zone := event.Start.Location()
-
-		existingYear, existingMonth, existingDay := existing.Until.In(zone).Date()
-
-		untilYear, untilMonth, untilDay := event.Recurrence.Until.In(zone).Date()
-
-		sameUntil = existingYear == untilYear && existingMonth == untilMonth && existingDay == untilDay
-	}
-
-	sameFrequency := existing.Frequency == event.Recurrence.Frequency
-	sameInterval := max(existing.Interval, 1) == max(event.Recurrence.Interval, 1)
-
-	if sameFrequency && sameInterval && sameUntil {
+	if recurrenceSpec(icalEvent.Props).SameSpec(event.Recurrence, event.Start.Location()) {
 		return
 	}
 

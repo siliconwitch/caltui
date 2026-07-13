@@ -77,22 +77,22 @@ func TestErrorPopup(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			var model tea.Model = New()
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var model tea.Model = Model{}
 
 			model, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
-			for _, message := range c.messages {
+			for _, message := range testCase.messages {
 				model, _ = model.Update(message)
 			}
 
-			if c.yank {
+			if testCase.yank {
 				model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 			}
 
 			closed := false
-			for range c.dismissTimes {
+			for range testCase.dismissTimes {
 				var cmd tea.Cmd
 
 				model, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
@@ -104,17 +104,17 @@ func TestErrorPopup(t *testing.T) {
 				}
 			}
 
-			if closed != c.wantClosed {
-				t.Fatalf("want closed %v, got %v", c.wantClosed, closed)
+			if closed != testCase.wantClosed {
+				t.Fatalf("want closed %v, got %v", testCase.wantClosed, closed)
 			}
 
 			pending := model.(Model).Pending()
-			if pending != c.wantPending {
-				t.Fatalf("want %d pending, got %d", c.wantPending, pending)
+			if pending != testCase.wantPending {
+				t.Fatalf("want %d pending, got %d", testCase.wantPending, pending)
 			}
 
 			view := model.(Model).View()
-			for _, want := range c.wantInView {
+			for _, want := range testCase.wantInView {
 				if !strings.Contains(view, want) {
 					t.Errorf("view does not contain %q:\n%s", want, view)
 				}

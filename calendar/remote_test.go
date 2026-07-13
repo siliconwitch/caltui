@@ -12,15 +12,20 @@ import (
 )
 
 type fakeClient struct {
-	calendars []Calendar
-	events    []Event
-	fetchErr  error
-	created   []Event
-	updated   []Event
-	removed   []string
+	calendars   []Calendar
+	events      []Event
+	fetchErr    error
+	fetchedFrom time.Time
+	fetchedTo   time.Time
+	created     []Event
+	updated     []Event
+	removed     []string
 }
 
 func (f *fakeClient) fetch(from, to time.Time) ([]Calendar, []Event, error) {
+	f.fetchedFrom = from
+	f.fetchedTo = to
+
 	if f.fetchErr != nil {
 		return nil, nil, f.fetchErr
 	}
@@ -56,8 +61,6 @@ func testRemote(t *testing.T, accounts ...*remoteAccount) *Remote {
 	return &Remote{
 		location: time.UTC,
 		cacheDir: t.TempDir(),
-		from:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		to:       time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
 		clock:    func() time.Time { return time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC) },
 		accounts: accounts,
 	}
@@ -89,7 +92,11 @@ func TestRemoteSyncDecoratesAndCaches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events := remote.Events(remote.from, remote.to)
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	events := remote.Events(from, to)
 	if len(events) != 1 {
 		t.Fatalf("want 1 event, got %d", len(events))
 	}
@@ -116,12 +123,19 @@ func TestRemoteSyncDecoratesAndCaches(t *testing.T) {
 		t.Errorf("want cache file mode 0600, got %o", info.Mode().Perm())
 	}
 
-	restored := &remoteAccount{name: "home", client: client}
-	restoredRemote := testRemote(t, restored)
-	restoredRemote.cacheDir = remote.cacheDir
-	restoredRemote.loadCache(restored)
+	t.Setenv("CALTUI_CACHE", remote.cacheDir)
 
-	restoredEvents := restoredRemote.Events(remote.from, remote.to)
+	restoredRemote, err := NewRemote(
+		[]Account{{Name: "home", Type: "ics", URL: "http://unused.invalid"}},
+		nil,
+		time.UTC,
+	)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restoredEvents := restoredRemote.Events(from, to)
 	if len(restoredEvents) != 1 || restoredEvents[0].ID != "home:uid-1" {
 		t.Fatalf("want cached event home:uid-1, got %+v", restoredEvents)
 	}
@@ -129,15 +143,18 @@ func TestRemoteSyncDecoratesAndCaches(t *testing.T) {
 
 func TestRemoteWrites(t *testing.T) {
 	readOnly := &remoteAccount{
-		name:   "google",
-		client: &fakeClient{calendars: []Calendar{{Name: "Google"}}},
+		name:      "google",
+		client:    &fakeClient{calendars: []Calendar{{Name: "Google"}}},
+		calendars: []Calendar{{Name: "Google"}},
 	}
-	readOnly.calendars = []Calendar{{Name: "Google"}}
 
 	writable := &fakeWritableClient{fakeClient{calendars: []Calendar{{Name: "Work"}}}}
 
-	writableAccount := &remoteAccount{name: "fastmail", client: writable}
-	writableAccount.calendars = []Calendar{{Name: "Work"}}
+	writableAccount := &remoteAccount{
+		name:      "fastmail",
+		client:    writable,
+		calendars: []Calendar{{Name: "Work"}},
+	}
 
 	remote := testRemote(t, readOnly, writableAccount)
 
@@ -194,11 +211,11 @@ func TestRemoteWrites(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			err := c.action()
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := testCase.action()
 
-			if c.wantErr == "" {
+			if testCase.wantErr == "" {
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -206,8 +223,8 @@ func TestRemoteWrites(t *testing.T) {
 				return
 			}
 
-			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Fatalf("want error containing %q, got %v", c.wantErr, err)
+			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("want error containing %q, got %v", testCase.wantErr, err)
 			}
 		})
 	}
@@ -251,13 +268,13 @@ func TestNewRemoteCaldavIdentityFromCredentialsFile(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "credentials.toml")
 			t.Setenv("CALTUI_CREDENTIALS", path)
 			t.Setenv("CALTUI_CACHE", t.TempDir())
 
-			if err := os.WriteFile(path, []byte(c.credentialsFile), 0o600); err != nil {
+			if err := os.WriteFile(path, []byte(testCase.credentialsFile), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -265,10 +282,9 @@ func TestNewRemoteCaldavIdentityFromCredentialsFile(t *testing.T) {
 				[]Account{{Name: "work", Type: "caldav"}},
 				nil,
 				time.UTC,
-				time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC),
 			)
 
-			if c.wantErr == "" {
+			if testCase.wantErr == "" {
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -276,8 +292,8 @@ func TestNewRemoteCaldavIdentityFromCredentialsFile(t *testing.T) {
 				return
 			}
 
-			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Fatalf("want error containing %q, got %v", c.wantErr, err)
+			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("want error containing %q, got %v", testCase.wantErr, err)
 			}
 		})
 	}
@@ -310,7 +326,6 @@ func TestNewRemoteWithICSSubscription(t *testing.T) {
 		[]Account{{Name: "team", Type: "ics", URL: server.URL}},
 		nil,
 		time.UTC,
-		time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
 	)
 
 	if err != nil {
@@ -321,7 +336,10 @@ func TestNewRemoteWithICSSubscription(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events := remote.Events(remote.from, remote.to)
+	events := remote.Events(
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
+	)
 	if len(events) != 1 || events[0].Title != "Offsite" {
 		t.Fatalf("want the Offsite event, got %+v", events)
 	}
@@ -349,7 +367,7 @@ func TestDecorateColorOverrides(t *testing.T) {
 		{
 			name:      "no override falls back to the palette",
 			overrides: nil,
-			wantColor: paletteColor("icloud/General"),
+			wantColor: "#7DCFFF",
 		},
 		{
 			name:      "bare calendar name override",
@@ -368,9 +386,9 @@ func TestDecorateColorOverrides(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			remote := &Remote{location: time.UTC, colorOverrides: c.overrides}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			remote := &Remote{location: time.UTC, colorOverrides: testCase.overrides}
 
 			calendars, events := remote.decorate(
 				"icloud",
@@ -378,12 +396,12 @@ func TestDecorateColorOverrides(t *testing.T) {
 				[]Event{{ID: "one", Calendar: "General"}},
 			)
 
-			if calendars[0].Color != c.wantColor {
-				t.Errorf("want calendar color %q, got %q", c.wantColor, calendars[0].Color)
+			if calendars[0].Color != testCase.wantColor {
+				t.Errorf("want calendar color %q, got %q", testCase.wantColor, calendars[0].Color)
 			}
 
-			if events[0].Color != c.wantColor {
-				t.Errorf("want event color %q, got %q", c.wantColor, events[0].Color)
+			if events[0].Color != testCase.wantColor {
+				t.Errorf("want event color %q, got %q", testCase.wantColor, events[0].Color)
 			}
 		})
 	}
@@ -405,12 +423,14 @@ func TestSyncRollsTheWindowForward(t *testing.T) {
 
 	wantTo := time.Date(2028, 3, 1, 12, 0, 0, 0, time.UTC)
 
-	if !remote.from.Equal(wantFrom) || !remote.to.Equal(wantTo) {
-		t.Errorf("want window %v to %v, got %v to %v", wantFrom, wantTo, remote.from, remote.to)
+	if !client.fetchedFrom.Equal(wantFrom) || !client.fetchedTo.Equal(wantTo) {
+		t.Errorf("want window %v to %v, got %v to %v", wantFrom, wantTo, client.fetchedFrom, client.fetchedTo)
 	}
 }
 
-func TestSyncEmptyResultGuard(t *testing.T) {
+func syncedOffsiteRemote(t *testing.T) (*Remote, *fakeClient, Event) {
+	t.Helper()
+
 	offsite := Event{
 		ID:       "uid-1",
 		Title:    "Offsite",
@@ -424,13 +444,17 @@ func TestSyncEmptyResultGuard(t *testing.T) {
 		events:    []Event{offsite},
 	}
 
-	account := &remoteAccount{name: "work", client: client}
-
-	remote := testRemote(t, account)
+	remote := testRemote(t, &remoteAccount{name: "work", client: client})
 
 	if err := remote.Sync("work", SyncAutomatic); err != nil {
 		t.Fatal(err)
 	}
+
+	return remote, client, offsite
+}
+
+func TestSyncEmptyResultGuard(t *testing.T) {
+	remote, client, offsite := syncedOffsiteRemote(t)
 
 	client.events = nil
 
@@ -444,7 +468,11 @@ func TestSyncEmptyResultGuard(t *testing.T) {
 		t.Fatal("want automatic refreshes to never accept the empty result")
 	}
 
-	if events := remote.Events(remote.from, remote.to); len(events) != 1 {
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	if events := remote.Events(from, to); len(events) != 1 {
 		t.Fatalf("want the cached event kept after suspect empty syncs, got %+v", events)
 	}
 
@@ -458,7 +486,7 @@ func TestSyncEmptyResultGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if events := remote.Events(remote.from, remote.to); len(events) != 0 {
+	if events := remote.Events(from, to); len(events) != 0 {
 		t.Fatalf("want the manually confirmed empty result accepted, got %+v", events)
 	}
 
@@ -476,26 +504,7 @@ func TestSyncEmptyResultGuard(t *testing.T) {
 }
 
 func TestSyncEmptyResultGuardExceptions(t *testing.T) {
-	offsite := Event{
-		ID:       "uid-1",
-		Title:    "Offsite",
-		Calendar: "Work",
-		Start:    time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC),
-		End:      time.Date(2026, 6, 1, 11, 0, 0, 0, time.UTC),
-	}
-
-	client := &fakeClient{
-		calendars: []Calendar{{Name: "Work"}},
-		events:    []Event{offsite},
-	}
-
-	account := &remoteAccount{name: "work", client: client}
-
-	remote := testRemote(t, account)
-
-	if err := remote.Sync("work", SyncAutomatic); err != nil {
-		t.Fatal(err)
-	}
+	remote, client, offsite := syncedOffsiteRemote(t)
 
 	client.events = nil
 

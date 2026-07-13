@@ -175,16 +175,16 @@ func TestEventsFromICal(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			parsed := eventsFromICal(decodeICS(t, c.body...), "Test", "", from, to, time.UTC)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			parsed := eventsFromICal(decodeICS(t, testCase.body...), "Test", "", from, to, time.UTC)
 
-			if len(parsed) != len(c.want) {
-				t.Fatalf("want %d events, got %d: %+v", len(c.want), len(parsed), parsed)
+			if len(parsed) != len(testCase.want) {
+				t.Fatalf("want %d events, got %d: %+v", len(testCase.want), len(parsed), parsed)
 			}
 
 			seenIDs := map[string]bool{}
-			for index, want := range c.want {
+			for index, want := range testCase.want {
 				got := parsed[index].Event
 
 				if seenIDs[got.ID] {
@@ -332,19 +332,19 @@ func TestAlarmParsing(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			events := eventsFromICal(decodeICS(t, c.body...), "Work", "", from, to, time.UTC)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			events := eventsFromICal(decodeICS(t, testCase.body...), "Work", "", from, to, time.UTC)
 
 			if len(events) != 1 {
 				t.Fatalf("want 1 event, got %d", len(events))
 			}
 
-			if len(events[0].Alarms) != len(c.want) {
-				t.Fatalf("want alarms %v, got %v", c.want, events[0].Alarms)
+			if len(events[0].Alarms) != len(testCase.want) {
+				t.Fatalf("want alarms %v, got %v", testCase.want, events[0].Alarms)
 			}
 
-			for index, offset := range c.want {
+			for index, offset := range testCase.want {
 				if events[0].Alarms[index] != offset {
 					t.Errorf("want alarm %d to be %v, got %v", index, offset, events[0].Alarms[index])
 				}

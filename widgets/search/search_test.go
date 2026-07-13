@@ -1,6 +1,8 @@
 package search
 
 import (
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,19 @@ type sourceStub struct{ events []calendar.Event }
 func (s sourceStub) Events(from, to time.Time) []calendar.Event { return s.events }
 
 func (s sourceStub) Calendars() []calendar.Calendar { return nil }
+
+func typedModel(events []calendar.Event, query string) Model {
+	var model tea.Model = New(sourceStub{events: events}, time.UTC)
+
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model, _ = model.Update(msgs.OpenSearchMsg{})
+
+	for _, character := range query {
+		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{character}})
+	}
+
+	return model.(Model)
+}
 
 func TestSearchFiltersAndJumps(t *testing.T) {
 	standup := calendar.Event{
@@ -44,21 +59,20 @@ func TestSearchFiltersAndJumps(t *testing.T) {
 		{name: "blank query lists nothing", query: "", wantTitles: nil},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			model := New(sourceStub{events: []calendar.Event{standup, dinner}}, time.UTC)
-			model.queryInput.SetValue(c.query)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			view := typedModel([]calendar.Event{standup, dinner}, testCase.query).View()
 
-			model = model.withResults()
+			for _, title := range []string{"Standup", "Dinner"} {
+				wantShown := slices.Contains(testCase.wantTitles, title)
 
-			if len(model.results) != len(c.wantTitles) {
-				t.Fatalf("want %d results, got %+v", len(c.wantTitles), model.results)
+				if strings.Contains(view, title) != wantShown {
+					t.Errorf("want %q shown=%v, got view:\n%s", title, wantShown, view)
+				}
 			}
 
-			for index, title := range c.wantTitles {
-				if model.results[index].Title != title {
-					t.Errorf("want result %d to be %q, got %q", index, title, model.results[index].Title)
-				}
+			if len(testCase.wantTitles) == 2 && strings.Index(view, testCase.wantTitles[0]) > strings.Index(view, testCase.wantTitles[1]) {
+				t.Errorf("want %q listed before %q, got view:\n%s", testCase.wantTitles[0], testCase.wantTitles[1], view)
 			}
 		})
 	}
@@ -72,9 +86,7 @@ func TestSearchEnterJumpsToResult(t *testing.T) {
 		End:   time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC),
 	}
 
-	model := New(sourceStub{events: []calendar.Event{event}}, time.UTC)
-	model.queryInput.SetValue("stand")
-	model = model.withResults()
+	model := typedModel([]calendar.Event{event}, "stand")
 
 	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 

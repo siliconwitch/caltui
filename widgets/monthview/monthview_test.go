@@ -2,8 +2,12 @@ package monthview
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/siliconwitch/caltui/calendar"
 )
@@ -37,12 +41,12 @@ func TestWeekLayout(t *testing.T) {
 	}
 
 	type expectation struct {
-		title     string
-		firstCol  int
-		lastCol   int
-		multiDay  bool
-		continued bool
-		lane      int
+		title       string
+		firstColumn int
+		lastColumn  int
+		multiDay    bool
+		continued   bool
+		lane        int
 	}
 
 	cases := []struct {
@@ -57,8 +61,8 @@ func TestWeekLayout(t *testing.T) {
 				{ID: "2", Title: "Standup", Start: at(2, 9, 30), End: at(2, 9, 45)},
 			},
 			want: []expectation{
-				{title: "Sprint", firstCol: 1, lastCol: 3, multiDay: true, lane: 0},
-				{title: "Standup", firstCol: 2, lastCol: 2, lane: 1},
+				{title: "Sprint", firstColumn: 1, lastColumn: 3, multiDay: true, lane: 0},
+				{title: "Standup", firstColumn: 2, lastColumn: 2, lane: 1},
 			},
 		},
 		{
@@ -67,7 +71,7 @@ func TestWeekLayout(t *testing.T) {
 				{ID: "1", Title: "Trip", AllDay: true, Start: day(-2), End: day(2)},
 			},
 			want: []expectation{
-				{title: "Trip", firstCol: 0, lastCol: 1, multiDay: true, continued: true, lane: 0},
+				{title: "Trip", firstColumn: 0, lastColumn: 1, multiDay: true, continued: true, lane: 0},
 			},
 		},
 		{
@@ -76,7 +80,7 @@ func TestWeekLayout(t *testing.T) {
 				{ID: "1", Title: "Holiday", AllDay: true, Start: day(5), End: day(9)},
 			},
 			want: []expectation{
-				{title: "Holiday", firstCol: 5, lastCol: 6, multiDay: true, lane: 0},
+				{title: "Holiday", firstColumn: 5, lastColumn: 6, multiDay: true, lane: 0},
 			},
 		},
 		{
@@ -85,7 +89,7 @@ func TestWeekLayout(t *testing.T) {
 				{ID: "1", Title: "Flight", Start: at(2, 16, 0), End: at(3, 9, 30)},
 			},
 			want: []expectation{
-				{title: "Flight", firstCol: 2, lastCol: 3, multiDay: true, lane: 0},
+				{title: "Flight", firstColumn: 2, lastColumn: 3, multiDay: true, lane: 0},
 			},
 		},
 		{
@@ -94,7 +98,7 @@ func TestWeekLayout(t *testing.T) {
 				{ID: "1", Title: "Late show", Start: at(1, 22, 0), End: at(2, 0, 0)},
 			},
 			want: []expectation{
-				{title: "Late show", firstCol: 1, lastCol: 1, lane: 0},
+				{title: "Late show", firstColumn: 1, lastColumn: 1, lane: 0},
 			},
 		},
 		{
@@ -105,9 +109,9 @@ func TestWeekLayout(t *testing.T) {
 				{ID: "3", Title: "Standup", Start: at(2, 9, 30), End: at(2, 9, 45)},
 			},
 			want: []expectation{
-				{title: "Sprint", firstCol: 0, lastCol: 1, multiDay: true, lane: 0},
-				{title: "Fair", firstCol: 3, lastCol: 4, multiDay: true, lane: 0},
-				{title: "Standup", firstCol: 2, lastCol: 2, lane: 0},
+				{title: "Sprint", firstColumn: 0, lastColumn: 1, multiDay: true, lane: 0},
+				{title: "Fair", firstColumn: 3, lastColumn: 4, multiDay: true, lane: 0},
+				{title: "Standup", firstColumn: 2, lastColumn: 2, lane: 0},
 			},
 		},
 	}
@@ -141,12 +145,12 @@ func TestWeekLayout(t *testing.T) {
 					found = true
 
 					actual := expectation{
-						title:     entry.event.Title,
-						firstCol:  entry.firstCol,
-						lastCol:   entry.lastCol,
-						multiDay:  entry.multiDay,
-						continued: entry.continued,
-						lane:      laneOf[index],
+						title:       entry.event.Title,
+						firstColumn: entry.firstColumn,
+						lastColumn:  entry.lastColumn,
+						multiDay:    entry.multiDay,
+						continued:   entry.continued,
+						lane:        laneOf[index],
 					}
 
 					if actual != expected {
@@ -263,14 +267,43 @@ func TestColumnWidths(t *testing.T) {
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			gutterWidth, cellWidths := columnWidths(testCase.width, testCase.showWeekNumbers)
+			model := New(fakeSource{}, Config{ShowWeekNumbers: testCase.showWeekNumbers}, time.UTC)
 
-			if gutterWidth != testCase.expectedGutter {
-				t.Fatalf("columnWidths(%d, %v) gutter = %d, expected %d", testCase.width, testCase.showWeekNumbers, gutterWidth, testCase.expectedGutter)
+			resized, _ := model.Update(tea.WindowSizeMsg{Width: testCase.width, Height: 20})
+
+			lines := strings.Split(ansi.Strip(resized.View()), "\n")
+
+			if len(lines) < 3 {
+				t.Fatalf("View() at width %d rendered %d lines, expected at least 3", testCase.width, len(lines))
 			}
 
+			gutterWidth := strings.Index(lines[0], "Mon") - 1
+
+			if gutterWidth != testCase.expectedGutter {
+				t.Fatalf("View() at width %d gutter = %d, expected %d", testCase.width, gutterWidth, testCase.expectedGutter)
+			}
+
+			dayNumberLine := []rune(lines[2])
+
+			var separators []int
+			for position, character := range dayNumberLine {
+				if character == '│' {
+					separators = append(separators, position)
+				}
+			}
+
+			if len(separators) != 6 {
+				t.Fatalf("View() at width %d day-number line has %d separators, expected 6", testCase.width, len(separators))
+			}
+
+			cellWidths := []int{separators[0] - gutterWidth}
+			for index := 1; index < len(separators); index++ {
+				cellWidths = append(cellWidths, separators[index]-separators[index-1]-1)
+			}
+			cellWidths = append(cellWidths, len(dayNumberLine)-separators[5]-1)
+
 			if !slices.Equal(cellWidths, testCase.expectedCells) {
-				t.Fatalf("columnWidths(%d, %v) cells = %v, expected %v", testCase.width, testCase.showWeekNumbers, cellWidths, testCase.expectedCells)
+				t.Fatalf("View() at width %d cells = %v, expected %v", testCase.width, cellWidths, testCase.expectedCells)
 			}
 
 			total := gutterWidth + 6
@@ -278,8 +311,12 @@ func TestColumnWidths(t *testing.T) {
 				total += cellWidth
 			}
 
-			if total != testCase.width {
-				t.Fatalf("columnWidths(%d, %v) spans %d columns, expected %d", testCase.width, testCase.showWeekNumbers, total, testCase.width)
+			if total != len(dayNumberLine) {
+				t.Fatalf("View() at width %d spans %d columns but rendered %d", testCase.width, total, len(dayNumberLine))
+			}
+
+			if len(dayNumberLine) != testCase.width {
+				t.Fatalf("View() at width %d rendered a %d-wide day-number line", testCase.width, len(dayNumberLine))
 			}
 		})
 	}

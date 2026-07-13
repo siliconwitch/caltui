@@ -113,10 +113,12 @@ func (m Model) View() string {
 
 		localEnd := m.event.End.In(m.location)
 
-		localWhen = "Local: " + localStart.Format("Mon 2 Jan 15:04") + " - " + localEnd.Format("15:04")
+		endFormat := "15:04"
 		if localEnd.YearDay() != localStart.YearDay() || localEnd.Year() != localStart.Year() {
-			localWhen = "Local: " + localStart.Format("Mon 2 Jan 15:04") + " - " + localEnd.Format("Mon 2 Jan 15:04")
+			endFormat = "Mon 2 Jan 15:04"
 		}
+
+		localWhen = "Local: " + localStart.Format("Mon 2 Jan 15:04") + " - " + localEnd.Format(endFormat)
 	}
 
 	calendarLine := m.event.Calendar

@@ -48,16 +48,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "j", "down", "tab":
-			if len(entries) > 0 {
-				m.selectedIndex = (m.selectedIndex + 1) % len(entries)
+			if len(entries) == 0 {
+				return m, nil
 			}
+
+			m.selectedIndex = (m.selectedIndex + 1) % len(entries)
 
 			return m, nil
 
 		case "k", "up", "shift+tab":
-			if len(entries) > 0 {
-				m.selectedIndex = (m.selectedIndex + len(entries) - 1) % len(entries)
+			if len(entries) == 0 {
+				return m, nil
 			}
+
+			m.selectedIndex = (m.selectedIndex + len(entries) - 1) % len(entries)
 
 			return m, nil
 

@@ -24,19 +24,19 @@ type CalendarVisibility struct {
 func NewVisible(source Source) *Visible {
 	visible := &Visible{source: source, hidden: map[string]bool{}}
 
-	cacheDir, err := CacheDir()
+	cacheDirectory, err := cacheDir()
 
 	if err != nil {
 		return visible
 	}
 
-	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+	if err := os.MkdirAll(cacheDirectory, 0o700); err != nil {
 		return visible
 	}
 
 	// The leading dot keeps the file out of the <account>.json namespace,
 	// since account names cannot contain dots.
-	visible.hiddenPath = filepath.Join(cacheDir, ".hidden.json")
+	visible.hiddenPath = filepath.Join(cacheDirectory, ".hidden.json")
 
 	data, err := os.ReadFile(visible.hiddenPath)
 

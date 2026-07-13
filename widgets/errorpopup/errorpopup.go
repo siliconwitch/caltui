@@ -12,17 +12,11 @@ import (
 	"github.com/siliconwitch/caltui/theme"
 )
 
-const maxInnerWidth = 76
-
 type Model struct {
 	errors []string
 	copied bool
 	width  int
 	height int
-}
-
-func New() Model {
-	return Model{}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -85,7 +79,7 @@ func (m Model) View() string {
 		return ""
 	}
 
-	innerWidth := min(maxInnerWidth, max(20, m.width-8))
+	innerWidth := min(76, max(20, m.width-8))
 
 	heading := "Error"
 	if len(m.errors) > 1 {

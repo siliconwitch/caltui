@@ -33,19 +33,19 @@ func TestVisibility(t *testing.T) {
 		{"hidden after events change", []tea.Msg{msgs.EventSelectedMsg{Event: &event}, msgs.EventsChangedMsg{}}, false},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
 			var model tea.Model = New(time.Local)
 
 			model, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-			for _, message := range c.messages {
+			for _, message := range testCase.messages {
 				model, _ = model.Update(message)
 			}
 
 			view := model.View()
 
-			if visible := view != ""; visible != c.visible {
-				t.Fatalf("expected visible=%v, got view %q", c.visible, view)
+			if visible := view != ""; visible != testCase.visible {
+				t.Fatalf("expected visible=%v, got view %q", testCase.visible, view)
 			}
 		})
 	}
@@ -61,11 +61,11 @@ func TestDurationSummary(t *testing.T) {
 		{90, "1h 30m"},
 	}
 
-	for _, c := range cases {
+	for _, testCase := range cases {
 		event := calendar.Event{
 			Title:    "Call with John",
 			Start:    start,
-			End:      start.Add(time.Duration(c.minutes) * time.Minute),
+			End:      start.Add(time.Duration(testCase.minutes) * time.Minute),
 			Calendar: "Personal",
 		}
 
@@ -76,8 +76,8 @@ func TestDurationSummary(t *testing.T) {
 
 		view := model.View()
 
-		if !strings.Contains(view, c.expected) {
-			t.Errorf("duration %dm: expected view to contain %q, got %q", c.minutes, c.expected, view)
+		if !strings.Contains(view, testCase.expected) {
+			t.Errorf("duration %dm: expected view to contain %q, got %q", testCase.minutes, testCase.expected, view)
 		}
 	}
 }
@@ -102,15 +102,15 @@ func TestLineWidths(t *testing.T) {
 		{30, 26},
 	}
 
-	for _, c := range cases {
+	for _, testCase := range cases {
 		var model tea.Model = New(time.Local)
 
-		model, _ = model.Update(tea.WindowSizeMsg{Width: c.terminalWidth, Height: 40})
+		model, _ = model.Update(tea.WindowSizeMsg{Width: testCase.terminalWidth, Height: 40})
 		model, _ = model.Update(msgs.EventSelectedMsg{Event: &event})
 
 		for _, line := range strings.Split(model.View(), "\n") {
-			if width := ansi.StringWidth(line); width > c.maximumBoxWidth {
-				t.Errorf("terminal width %d: line width %d exceeds %d: %q", c.terminalWidth, width, c.maximumBoxWidth, line)
+			if width := ansi.StringWidth(line); width > testCase.maximumBoxWidth {
+				t.Errorf("terminal width %d: line width %d exceeds %d: %q", testCase.terminalWidth, width, testCase.maximumBoxWidth, line)
 			}
 		}
 	}

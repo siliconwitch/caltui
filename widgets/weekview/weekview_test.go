@@ -119,12 +119,12 @@ func TestBannerLayout(t *testing.T) {
 	day := func(offset int) time.Time { return week.AddDate(0, 0, offset) }
 
 	type expectation struct {
-		title     string
-		firstCol  int
-		lastCol   int
-		multiDay  bool
-		continued bool
-		lane      int
+		title       string
+		firstColumn int
+		lastColumn  int
+		multiDay    bool
+		continued   bool
+		lane        int
 	}
 
 	cases := []struct {
@@ -146,8 +146,8 @@ func TestBannerLayout(t *testing.T) {
 				{ID: "2", Title: "Holiday", AllDay: true, Start: day(2), End: day(3)},
 			},
 			want: []expectation{
-				{title: "Sprint", firstCol: 1, lastCol: 3, multiDay: true, lane: 0},
-				{title: "Holiday", firstCol: 2, lastCol: 2, lane: 1},
+				{title: "Sprint", firstColumn: 1, lastColumn: 3, multiDay: true, lane: 0},
+				{title: "Holiday", firstColumn: 2, lastColumn: 2, lane: 1},
 			},
 		},
 		{
@@ -156,7 +156,7 @@ func TestBannerLayout(t *testing.T) {
 				{ID: "1", Title: "Trip", AllDay: true, Start: day(-2), End: day(2)},
 			},
 			want: []expectation{
-				{title: "Trip", firstCol: 0, lastCol: 1, multiDay: true, continued: true, lane: 0},
+				{title: "Trip", firstColumn: 0, lastColumn: 1, multiDay: true, continued: true, lane: 0},
 			},
 		},
 		{
@@ -166,8 +166,8 @@ func TestBannerLayout(t *testing.T) {
 				{ID: "2", Title: "Fair", AllDay: true, Start: day(3), End: day(5)},
 			},
 			want: []expectation{
-				{title: "Sprint", firstCol: 0, lastCol: 1, multiDay: true, lane: 0},
-				{title: "Fair", firstCol: 3, lastCol: 4, multiDay: true, lane: 0},
+				{title: "Sprint", firstColumn: 0, lastColumn: 1, multiDay: true, lane: 0},
+				{title: "Fair", firstColumn: 3, lastColumn: 4, multiDay: true, lane: 0},
 			},
 		},
 	}
@@ -203,12 +203,12 @@ func TestBannerLayout(t *testing.T) {
 					found = true
 
 					actual := expectation{
-						title:     entry.event.Title,
-						firstCol:  entry.firstCol,
-						lastCol:   entry.lastCol,
-						multiDay:  entry.multiDay,
-						continued: entry.continued,
-						lane:      laneOf[index],
+						title:       entry.event.Title,
+						firstColumn: entry.firstColumn,
+						lastColumn:  entry.lastColumn,
+						multiDay:    entry.multiDay,
+						continued:   entry.continued,
+						lane:        laneOf[index],
 					}
 
 					if actual != expected {

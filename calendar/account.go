@@ -24,7 +24,7 @@ type Account struct {
 
 var accountNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-func (a Account) Validate() error {
+func (a Account) validate() error {
 	if !accountNamePattern.MatchString(a.Name) {
 		return fmt.Errorf("account name %q must contain only letters, digits, dashes and underscores", a.Name)
 	}
@@ -32,11 +32,11 @@ func (a Account) Validate() error {
 	switch a.Type {
 	case "caldav":
 		if a.URL == "" {
-			return fmt.Errorf("account %q: caldav accounts need a url, in the config or in %s", a.Name, CredentialsPath())
+			return fmt.Errorf("account %q: caldav accounts need a url, in the config or in %s", a.Name, credentialsPath())
 		}
 
 		if a.Username == "" {
-			return fmt.Errorf("account %q: caldav accounts need a username, in the config or in %s", a.Name, CredentialsPath())
+			return fmt.Errorf("account %q: caldav accounts need a username, in the config or in %s", a.Name, credentialsPath())
 		}
 
 		return nil
@@ -56,7 +56,7 @@ type credentialsEntry struct {
 }
 
 func storedCredentials(accountName string) (credentialsEntry, error) {
-	path := CredentialsPath()
+	path := credentialsPath()
 
 	info, err := os.Stat(path)
 
@@ -79,7 +79,7 @@ func storedCredentials(accountName string) (credentialsEntry, error) {
 	return entries[accountName], nil
 }
 
-func (a Account) Secret() (string, error) {
+func (a Account) secret() (string, error) {
 	if a.CredentialCommand != "" {
 		output, err := exec.Command("sh", "-c", a.CredentialCommand).Output()
 
@@ -104,14 +104,14 @@ func (a Account) Secret() (string, error) {
 	if entry.Secret == "" {
 		return "", fmt.Errorf(
 			"account %q has no secret: set credential_command in the config, or put secret = \"...\" in a [%s] section of %s",
-			a.Name, a.Name, CredentialsPath(),
+			a.Name, a.Name, credentialsPath(),
 		)
 	}
 
 	return entry.Secret, nil
 }
 
-func CredentialsPath() string {
+func credentialsPath() string {
 	if path := os.Getenv("CALTUI_CREDENTIALS"); path != "" {
 		return path
 	}
@@ -128,18 +128,4 @@ func CredentialsPath() string {
 	}
 
 	return filepath.Join(stateHome, "caltui", "credentials.toml")
-}
-
-func CacheDir() (string, error) {
-	if path := os.Getenv("CALTUI_CACHE"); path != "" {
-		return path, nil
-	}
-
-	base, err := os.UserCacheDir()
-
-	if err != nil {
-		return "", fmt.Errorf("finding cache directory: %w", err)
-	}
-
-	return filepath.Join(base, "caltui"), nil
 }

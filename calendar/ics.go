@@ -22,7 +22,15 @@ func (c *icsClient) fetch(from, to time.Time) ([]Calendar, []Event, error) {
 	response, err := c.httpClient.Get(c.url)
 
 	if err != nil {
-		return nil, nil, fmt.Errorf("fetching calendar: %w", withoutSecretURL(err))
+		// The subscription URL is a credential, and url.Error embeds it, so
+		// the wrapper is stripped before the error can reach the screen.
+		var urlErr *url.Error
+
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+
+		return nil, nil, fmt.Errorf("fetching calendar: %w", err)
 	}
 	defer response.Body.Close()
 
@@ -49,14 +57,4 @@ func (c *icsClient) fetch(from, to time.Time) ([]Calendar, []Event, error) {
 	}
 
 	return []Calendar{{Name: name}}, events, nil
-}
-
-func withoutSecretURL(err error) error {
-	var urlErr *url.Error
-
-	if errors.As(err, &urlErr) {
-		return urlErr.Err
-	}
-
-	return err
 }

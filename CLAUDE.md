@@ -19,10 +19,11 @@ General and meant to be reused verbatim across projects.
 - **Guard clauses.** Handle edge cases and errors first and return early, so the
   happy path stays unindented and reads straight down the function.
 - **No comments.** Code must explain itself through naming and structure.
-  (Struct tags are not comments.) The rare exception is a constraint the code
-  cannot express on its own — an external or internal protocol, not a
-  restatement of what the code does — such as noting that a flag exists only
-  because another process invokes it.
+  (Struct tags are not comments.) Two exceptions: a constraint the code cannot
+  express on its own — an external or internal protocol, not a restatement of
+  what the code does, such as noting that a flag exists only because another
+  process invokes it — and a single-line heading before each grouped step of a
+  large procedural function, added only when it genuinely aids readability.
 - **Procedural code.** Always inline simple logic so readers don't have to jump
   around to see what small functions do. 1-3 line functions shouldn't exist
   unless there's a very good reason — e.g. they wrap something that could change,

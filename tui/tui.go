@@ -7,9 +7,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/siliconwitch/caltui/calendar"
 	"github.com/siliconwitch/caltui/msgs"
+	"github.com/siliconwitch/caltui/theme"
 )
 
 type syncer interface {
@@ -96,8 +98,8 @@ func (m Model) Init() tea.Cmd {
 }
 
 func clockTick() tea.Cmd {
-	return tea.Tick(time.Minute, func(t time.Time) tea.Msg {
-		return clockTickMsg(t)
+	return tea.Tick(time.Minute, func(now time.Time) tea.Msg {
+		return clockTickMsg(now)
 	})
 }
 
@@ -133,57 +135,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.popup != "" {
-			switch m.popup {
-			case "form":
-				form, cmd := m.form.Update(msg)
-				m.form = form
-
-				return m, cmd
-
-			case "confirm":
-				confirm, cmd := m.confirm.Update(msg)
-				m.confirm = confirm
-
-				return m, cmd
-
-			case "goto":
-				gotoDate, cmd := m.gotoDate.Update(msg)
-				m.gotoDate = gotoDate
-
-				return m, cmd
-
-			case "scope":
-				scopePicker, cmd := m.scopePicker.Update(msg)
-				m.scopePicker = scopePicker
-
-				return m, cmd
-
-			case "search":
-				search, cmd := m.search.Update(msg)
-				m.search = search
-
-				return m, cmd
-
-			case "calendars":
-				calendars, cmd := m.calendars.Update(msg)
-				m.calendars = calendars
-
-				return m, cmd
-
-			case "alert":
-				alertPopup, cmd := m.alertPopup.Update(msg)
-				m.alertPopup = alertPopup
-
-				return m, cmd
-
-			case "error":
-				errorPopup, cmd := m.errorPopup.Update(msg)
-				m.errorPopup = errorPopup
-
-				return m, cmd
+			popupWidget := m.popupModel()
+			if popupWidget == nil {
+				return m, nil
 			}
 
-			return m, nil
+			updated, cmd := popupWidget.Update(msg)
+
+			switch m.popup {
+			case "form":
+				m.form = updated
+			case "confirm":
+				m.confirm = updated
+			case "goto":
+				m.gotoDate = updated
+			case "scope":
+				m.scopePicker = updated
+			case "search":
+				m.search = updated
+			case "calendars":
+				m.calendars = updated
+			case "alert":
+				m.alertPopup = updated
+			case "error":
+				m.errorPopup = updated
+			}
+
+			return m, cmd
 		}
 
 		switch msg.String() {
@@ -201,7 +179,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "d":
 			if m.selectedEvent() != nil {
-				return m.updateActive(msg)
+				view, cmd := m.activeView().Update(msg)
+
+				return m.withActiveView(view), cmd
 			}
 
 			return m.switchView("day")
@@ -247,7 +227,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 
 		default:
-			return m.updateActive(msg)
+			view, cmd := m.activeView().Update(msg)
+
+			return m.withActiveView(view), cmd
 		}
 
 	case msgs.EventSelectedMsg:
@@ -330,18 +312,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case msg.Scope == msgs.ScopeOccurrence:
 				occurrenceStore, ok := store.(interface{ UpdateOccurrence(calendar.Event) error })
 				if !ok {
-					err = fmt.Errorf("this account cannot edit repeating events")
-				} else {
-					err = occurrenceStore.UpdateOccurrence(msg.Event)
+					return msgs.StoreErrorMsg{Err: fmt.Errorf("this account cannot edit repeating events")}
 				}
+
+				err = occurrenceStore.UpdateOccurrence(msg.Event)
 
 			case msg.Scope == msgs.ScopeSeries:
 				seriesStore, ok := store.(interface{ UpdateSeries(calendar.Event) error })
 				if !ok {
-					err = fmt.Errorf("this account cannot edit repeating events")
-				} else {
-					err = seriesStore.UpdateSeries(msg.Event)
+					return msgs.StoreErrorMsg{Err: fmt.Errorf("this account cannot edit repeating events")}
 				}
+
+				err = seriesStore.UpdateSeries(msg.Event)
 
 			default:
 				err = store.Update(msg.Event)
@@ -365,18 +347,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case msg.Scope == msgs.ScopeOccurrence:
 				occurrenceStore, ok := store.(interface{ DeleteOccurrence(string) error })
 				if !ok {
-					err = fmt.Errorf("this account cannot edit repeating events")
-				} else {
-					err = occurrenceStore.DeleteOccurrence(msg.Event.ID)
+					return msgs.StoreErrorMsg{Err: fmt.Errorf("this account cannot edit repeating events")}
 				}
+
+				err = occurrenceStore.DeleteOccurrence(msg.Event.ID)
 
 			case msg.Scope == msgs.ScopeSeries:
 				seriesStore, ok := store.(interface{ DeleteSeries(string) error })
 				if !ok {
-					err = fmt.Errorf("this account cannot edit repeating events")
-				} else {
-					err = seriesStore.DeleteSeries(msg.Event.ID)
+					return msgs.StoreErrorMsg{Err: fmt.Errorf("this account cannot edit repeating events")}
 				}
+
+				err = seriesStore.DeleteSeries(msg.Event.ID)
 
 			default:
 				err = store.Delete(msg.Event.ID)
@@ -408,10 +390,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		updated, broadcastCmd := m.broadcast(msgs.ClockTickMsg{Now: time.Time(msg)})
 		commands = append(commands, broadcastCmd)
 
-		if updated.popup == "" {
-			if pending, ok := updated.alertPopup.(interface{ Pending() int }); ok && pending.Pending() > 0 {
-				updated.popup = "alert"
-			}
+		if pending, ok := updated.alertPopup.(interface{ Pending() int }); ok && updated.popup == "" && pending.Pending() > 0 {
+			updated.popup = "alert"
 		}
 
 		return updated, tea.Batch(commands...)
@@ -517,36 +497,198 @@ func (m Model) View() string {
 	if detail := m.detail.View(); detail != "" && m.popup == "" {
 		x := (m.width - lipgloss.Width(detail)) / 2
 		y := m.height - 2 - lipgloss.Height(detail)
-		screen = Compose(screen, detail, x, y, m.width)
+		screen = compose(screen, detail, x, y, m.width)
 	}
 
 	if m.popup != "" {
-		var popup string
-		switch m.popup {
-		case "form":
-			popup = m.form.View()
-		case "confirm":
-			popup = m.confirm.View()
-		case "goto":
-			popup = m.gotoDate.View()
-		case "scope":
-			popup = m.scopePicker.View()
-		case "search":
-			popup = m.search.View()
-		case "calendars":
-			popup = m.calendars.View()
-		case "alert":
-			popup = m.alertPopup.View()
-		case "error":
-			popup = m.errorPopup.View()
+		popup := ""
+		if popupWidget := m.popupModel(); popupWidget != nil {
+			popup = popupWidget.View()
 		}
 
 		x := (m.width - lipgloss.Width(popup)) / 2
 		y := (m.height - 1 - lipgloss.Height(popup)) / 2
-		screen = Compose(screen, popup, x, y, m.width)
+		screen = compose(screen, popup, x, y, m.width)
 	}
 
-	return screen + "\n" + m.statusBar()
+	// status bar
+	source := m.activeView()
+	if popupWidget := m.popupModel(); popupWidget != nil {
+		source = popupWidget
+	}
+
+	var hints []msgs.KeyHint
+	if hinter, ok := source.(interface{ KeyHints() []msgs.KeyHint }); ok {
+		hints = hinter.KeyHints()
+	}
+
+	if m.popup == "" {
+		viewKeys := "m/w/d/a"
+		if m.selectedEvent() != nil {
+			viewKeys = "m/w/a"
+		}
+
+		hints = append(hints,
+			msgs.KeyHint{Key: "/", Action: "search"},
+			msgs.KeyHint{Key: "g", Action: "go to"},
+			msgs.KeyHint{Key: viewKeys, Action: "view"},
+		)
+
+		if _, ok := m.store.(syncer); ok {
+			hints = append(hints, msgs.KeyHint{Key: "r", Action: "refresh"})
+		}
+
+		hints = append(hints, msgs.KeyHint{Key: "q", Action: "quit"})
+	}
+
+	notice := ""
+	noticeStyle := lipgloss.NewStyle().Foreground(theme.Muted)
+
+	switch {
+	case m.notice != "":
+		notice = m.notice
+		noticeStyle = lipgloss.NewStyle().Foreground(theme.Danger)
+
+	case m.pendingSyncs > 0:
+		notice = "syncing…"
+	}
+
+	hintWidth := m.width
+	if notice != "" {
+		notice = ansi.Truncate(notice, max(m.width/2, 10), "…")
+		hintWidth = m.width - ansi.StringWidth(notice) - 2
+	}
+
+	keyStyle := lipgloss.NewStyle().Foreground(theme.Accent).Bold(true)
+	actionStyle := lipgloss.NewStyle().Foreground(theme.Muted)
+
+	render := func(hints []msgs.KeyHint, separator string) string {
+		parts := make([]string, 0, len(hints))
+		for _, hint := range hints {
+			parts = append(parts, keyStyle.Render(hint.Key)+" "+actionStyle.Render(hint.Action))
+		}
+
+		return " " + strings.Join(parts, actionStyle.Render(separator))
+	}
+
+	bar := render(hints, "  ·  ")
+
+	if ansi.StringWidth(bar) > hintWidth {
+		bar = render(hints, " · ")
+
+		for ansi.StringWidth(bar) > hintWidth {
+			dropIndex := -1
+			dropDistance := len(hints)
+
+			for index, hint := range hints {
+				if hint.Key == "q" || hint.Key == "esc" {
+					continue
+				}
+
+				distance := index - len(hints)/2
+				if distance < 0 {
+					distance = -distance
+				}
+
+				if distance < dropDistance {
+					dropIndex = index
+					dropDistance = distance
+				}
+			}
+
+			if dropIndex < 0 {
+				break
+			}
+
+			hints = append(hints[:dropIndex], hints[dropIndex+1:]...)
+
+			bar = render(hints, " · ")
+		}
+
+		bar = ansi.Truncate(bar, hintWidth, "…")
+	}
+
+	if notice == "" {
+		return screen + "\n" + bar
+	}
+
+	padding := max(m.width-ansi.StringWidth(bar)-ansi.StringWidth(notice)-1, 1)
+
+	return screen + "\n" + bar + strings.Repeat(" ", padding) + noticeStyle.Render(notice) + " "
+}
+
+const ansiReset = "\x1b[0m"
+
+func compose(background, overlay string, x, y, width int) string {
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+
+	backgroundLines := strings.Split(background, "\n")
+	overlayLines := strings.Split(overlay, "\n")
+
+	overlayWidth := 0
+	for _, line := range overlayLines {
+		if lineWidth := ansi.StringWidth(line); lineWidth > overlayWidth {
+			overlayWidth = lineWidth
+		}
+	}
+
+	for i, overlayLine := range overlayLines {
+		row := y + i
+		if row >= len(backgroundLines) {
+			break
+		}
+
+		backgroundLine := backgroundLines[row]
+
+		var wordCells []bool
+		for _, character := range ansi.Strip(backgroundLine) {
+			isWord := !strings.ContainsRune(" │─╌", character)
+			for range ansi.StringWidth(string(character)) {
+				wordCells = append(wordCells, isWord)
+			}
+		}
+
+		wordAt := func(cell int) bool {
+			return cell >= 0 && cell < len(wordCells) && wordCells[cell]
+		}
+
+		leftEdge := x
+		if wordAt(leftEdge-1) && wordAt(leftEdge) {
+			for wordAt(leftEdge - 1) {
+				leftEdge--
+			}
+		}
+
+		rightEdge := x + overlayWidth
+		if wordAt(rightEdge-1) && wordAt(rightEdge) {
+			for wordAt(rightEdge) {
+				rightEdge++
+			}
+		}
+
+		left := ansi.Truncate(backgroundLine, leftEdge, "")
+		if leftWidth := ansi.StringWidth(left); leftWidth < x {
+			left += strings.Repeat(" ", x-leftWidth)
+		}
+		left += ansiReset
+
+		padded := overlayLine
+		if lineWidth := ansi.StringWidth(overlayLine); lineWidth < overlayWidth {
+			padded += strings.Repeat(" ", overlayWidth-lineWidth)
+		}
+		padded += ansiReset
+
+		right := strings.Repeat(" ", rightEdge-x-overlayWidth) + ansi.TruncateLeft(backgroundLine, rightEdge, "")
+
+		backgroundLines[row] = ansi.Truncate(left+padded+right, width, "") + ansiReset
+	}
+
+	return strings.Join(backgroundLines, "\n")
 }
 
 func (m Model) activeView() tea.Model {
@@ -577,10 +719,27 @@ func (m Model) withActiveView(view tea.Model) Model {
 	return m
 }
 
-func (m Model) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
-	view, cmd := m.activeView().Update(msg)
-
-	return m.withActiveView(view), cmd
+func (m Model) popupModel() tea.Model {
+	switch m.popup {
+	case "form":
+		return m.form
+	case "confirm":
+		return m.confirm
+	case "goto":
+		return m.gotoDate
+	case "scope":
+		return m.scopePicker
+	case "search":
+		return m.search
+	case "calendars":
+		return m.calendars
+	case "alert":
+		return m.alertPopup
+	case "error":
+		return m.errorPopup
+	default:
+		return nil
+	}
 }
 
 func (m Model) switchView(target string) (tea.Model, tea.Cmd) {

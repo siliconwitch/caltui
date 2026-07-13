@@ -42,14 +42,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		m.queryInput.Width = m.innerWidth() - 2
+		m.queryInput.Width = min(60, max(24, m.width-8)) - 2
 
 		return m, nil
 
 	case msgs.OpenSearchMsg:
 		m.queryInput.SetValue("")
 		m.queryInput.Focus()
-		m.queryInput.Width = m.innerWidth() - 2
+		m.queryInput.Width = min(60, max(24, m.width-8)) - 2
 		m.results = nil
 		m.selectedIndex = 0
 
@@ -130,12 +130,8 @@ func (m Model) withResults() Model {
 	return m
 }
 
-func (m Model) innerWidth() int {
-	return min(60, max(24, m.width-8))
-}
-
 func (m Model) View() string {
-	innerWidth := m.innerWidth()
+	innerWidth := min(60, max(24, m.width-8))
 
 	lines := []string{
 		lipgloss.NewStyle().Bold(true).Render("Search"),

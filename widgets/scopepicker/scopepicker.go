@@ -17,10 +17,6 @@ type Model struct {
 	width int
 }
 
-func New() Model {
-	return Model{}
-}
-
 func (m Model) Init() tea.Cmd {
 	return nil
 }
@@ -38,17 +34,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		event := m.event
+
 		switch msg.String() {
 		case "o":
-			event := m.event
-
 			return m, func() tea.Msg {
 				return msgs.OpenEventFormMsg{Event: event, Scope: msgs.ScopeOccurrence}
 			}
 
 		case "s":
-			event := m.event
-
 			return m, func() tea.Msg {
 				return msgs.OpenEventFormMsg{Event: event, Scope: msgs.ScopeSeries}
 			}

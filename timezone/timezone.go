@@ -14,10 +14,10 @@ import (
 
 const visibleMatchCount = 6
 
-func Marker(t time.Time, base *time.Location) string {
-	abbreviation, offset := t.Zone()
+func Marker(instant time.Time, base *time.Location) string {
+	abbreviation, offset := instant.Zone()
 
-	_, baseOffset := t.In(base).Zone()
+	_, baseOffset := instant.In(base).Zone()
 
 	if offset == baseOffset {
 		return ""
@@ -26,7 +26,7 @@ func Marker(t time.Time, base *time.Location) string {
 	return "(" + abbreviation + ")"
 }
 
-func Search(query string) []zone {
+func search(query string) []zone {
 	normalized := strings.ToLower(strings.TrimSpace(query))
 	normalized = strings.ReplaceAll(normalized, "_", " ")
 
@@ -84,17 +84,8 @@ type Picker struct {
 	reference time.Time
 }
 
-func NewPicker() Picker {
-	return Picker{}
-}
-
-func (p Picker) Opened(reference time.Time, query string) Picker {
-	p.query = query
-	p.cursor = 0
-	p.scroll = 0
-	p.reference = reference
-
-	return p
+func NewPicker(reference time.Time, query string) Picker {
+	return Picker{query: query, reference: reference}
 }
 
 func (p Picker) Typed(key string) (Picker, *time.Location, bool) {
@@ -103,7 +94,7 @@ func (p Picker) Typed(key string) (Picker, *time.Location, bool) {
 		return p, nil, true
 
 	case "enter":
-		matches := Search(p.query)
+		matches := search(p.query)
 
 		if len(matches) == 0 {
 			return p, nil, false
@@ -118,7 +109,7 @@ func (p Picker) Typed(key string) (Picker, *time.Location, bool) {
 		return p, location, true
 
 	case "up", "down", "pgup", "pgdown":
-		lastIndex := max(len(Search(p.query))-1, 0)
+		lastIndex := max(len(search(p.query))-1, 0)
 
 		switch key {
 		case "up":
@@ -148,9 +139,7 @@ func (p Picker) Typed(key string) (Picker, *time.Location, bool) {
 		}
 
 		return p, nil, false
-	}
 
-	switch key {
 	case "", "left", "right", "tab", "shift+tab", "home", "end":
 		return p, nil, false
 	}
@@ -174,7 +163,7 @@ func (p Picker) View(width int) []string {
 
 	searchLine := accentStyle.Render("Search: ") + p.query + accentStyle.Render("▏")
 
-	matches := Search(p.query)
+	matches := search(p.query)
 
 	if len(matches) == 0 {
 		return []string{searchLine, mutedStyle.Render("no matches")}

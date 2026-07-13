@@ -155,7 +155,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			return m, func() tea.Msg { return msgs.OpenEventFormMsg{Event: template, IsNew: true} }
 
-		case "e":
+		case "e", "d", "y":
 			selected := m.SelectedEvent()
 
 			if selected == nil {
@@ -164,29 +164,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			event := *selected
 
-			return m, func() tea.Msg { return msgs.OpenEventFormMsg{Event: event, IsNew: false} }
-
-		case "d":
-			selected := m.SelectedEvent()
-
-			if selected == nil {
-				return m, nil
+			switch msg.String() {
+			case "e":
+				return m, func() tea.Msg { return msgs.OpenEventFormMsg{Event: event, IsNew: false} }
+			case "d":
+				return m, func() tea.Msg { return msgs.RequestDeleteMsg{Event: event} }
+			case "y":
+				return m, func() tea.Msg { return msgs.YankMsg{Event: event} }
 			}
 
-			event := *selected
-
-			return m, func() tea.Msg { return msgs.RequestDeleteMsg{Event: event} }
-
-		case "y":
-			selected := m.SelectedEvent()
-
-			if selected == nil {
-				return m, nil
-			}
-
-			event := *selected
-
-			return m, func() tea.Msg { return msgs.YankMsg{Event: event} }
+			return m, nil
 
 		case "p":
 			date := m.selectedDate
@@ -272,11 +259,11 @@ func (m Model) dayEvents(date time.Time) []calendar.Event {
 }
 
 type weekEvent struct {
-	event     calendar.Event
-	firstCol  int
-	lastCol   int
-	multiDay  bool
-	continued bool
+	event       calendar.Event
+	firstColumn int
+	lastColumn  int
+	multiDay    bool
+	continued   bool
 }
 
 func (m Model) weekLayout(week time.Time) ([]weekEvent, [][7]int) {
@@ -297,31 +284,31 @@ func (m Model) weekLayout(week time.Time) ([]weekEvent, [][7]int) {
 			endDay = startDay
 		}
 
-		firstCol, lastCol := 0, 6
+		firstColumn, lastColumn := 0, 6
 		for column := range 7 {
 			day := week.AddDate(0, 0, column)
 
 			if day.Equal(startDay) {
-				firstCol = column
+				firstColumn = column
 			}
 			if day.Equal(endDay) {
-				lastCol = column
+				lastColumn = column
 			}
 		}
 
 		weekEvents = append(weekEvents, weekEvent{
-			event:     event,
-			firstCol:  firstCol,
-			lastCol:   lastCol,
-			multiDay:  endDay.After(startDay),
-			continued: startDay.Before(week),
+			event:       event,
+			firstColumn: firstColumn,
+			lastColumn:  lastColumn,
+			multiDay:    endDay.After(startDay),
+			continued:   startDay.Before(week),
 		})
 	}
 
 	sort.SliceStable(weekEvents, func(i, j int) bool {
-		spanI := weekEvents[i].lastCol - weekEvents[i].firstCol
+		spanI := weekEvents[i].lastColumn - weekEvents[i].firstColumn
 
-		spanJ := weekEvents[j].lastCol - weekEvents[j].firstCol
+		spanJ := weekEvents[j].lastColumn - weekEvents[j].firstColumn
 
 		switch {
 		case spanI != spanJ:
@@ -342,7 +329,7 @@ func (m Model) weekLayout(week time.Time) ([]weekEvent, [][7]int) {
 
 		for laneIndex := range lanes {
 			free := true
-			for column := entry.firstCol; column <= entry.lastCol; column++ {
+			for column := entry.firstColumn; column <= entry.lastColumn; column++ {
 				if lanes[laneIndex][column] >= 0 {
 					free = false
 
@@ -362,7 +349,7 @@ func (m Model) weekLayout(week time.Time) ([]weekEvent, [][7]int) {
 			assignedLane = len(lanes) - 1
 		}
 
-		for column := entry.firstCol; column <= entry.lastCol; column++ {
+		for column := entry.firstColumn; column <= entry.lastColumn; column++ {
 			lanes[assignedLane][column] = index
 		}
 	}
@@ -416,7 +403,24 @@ func (m Model) View() string {
 		return ""
 	}
 
-	gutterWidth, cellWidths := columnWidths(m.width, m.config.ShowWeekNumbers)
+	// layout math
+	gutterWidth := 0
+	if m.config.ShowWeekNumbers {
+		gutterWidth = 3
+	}
+
+	availableWidth := m.width - gutterWidth - 6
+
+	baseWidth := availableWidth / 7
+	remainder := availableWidth % 7
+
+	cellWidths := make([]int, 7)
+	for i := range cellWidths {
+		cellWidths[i] = baseWidth
+		if i < remainder {
+			cellWidths[i]++
+		}
+	}
 
 	heights := rowHeights(m.height)
 
@@ -427,6 +431,7 @@ func (m Model) View() string {
 	gridStyle := lipgloss.NewStyle().Foreground(theme.Grid)
 	mutedStyle := lipgloss.NewStyle().Foreground(theme.Muted)
 
+	// weekday header
 	weekdayNames := []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
 
 	headerCells := make([]string, 0, len(weekdayNames))
@@ -480,6 +485,7 @@ func (m Model) View() string {
 			}
 		}
 
+		// overflow detection
 		var overflowing [7]bool
 		var hiddenCounts [7]int
 
@@ -515,6 +521,7 @@ func (m Model) View() string {
 				row.WriteString(strings.Repeat(" ", gutterWidth))
 			}
 
+			// day-number line
 			if lineIndex == 0 {
 				for column, day := range weekDays {
 					if column > 0 {
@@ -557,6 +564,7 @@ func (m Model) View() string {
 				continue
 			}
 
+			// event lanes
 			laneIndex := lineIndex - 1
 
 			column := 0
@@ -603,7 +611,7 @@ func (m Model) View() string {
 				event := entry.event
 
 				runEnd := column
-				for runEnd+1 <= entry.lastCol && (!overflowing[runEnd+1] || laneIndex < laneCapacity-1) {
+				for runEnd+1 <= entry.lastColumn && (!overflowing[runEnd+1] || laneIndex < laneCapacity-1) {
 					runEnd++
 				}
 
@@ -614,7 +622,7 @@ func (m Model) View() string {
 
 				piece := ""
 				switch {
-				case entry.continued || column > entry.firstCol:
+				case entry.continued || column > entry.firstColumn:
 					piece = " ↳ " + event.Title
 				case event.AllDay:
 					piece = " " + event.Title + " "
@@ -699,26 +707,4 @@ func rowHeights(height int) []int {
 	}
 
 	return heights
-}
-
-func columnWidths(width int, showWeekNumbers bool) (int, []int) {
-	gutterWidth := 0
-	if showWeekNumbers {
-		gutterWidth = 3
-	}
-
-	available := width - gutterWidth - 6
-
-	base := available / 7
-	remainder := available % 7
-
-	cellWidths := make([]int, 7)
-	for i := range cellWidths {
-		cellWidths[i] = base
-		if i < remainder {
-			cellWidths[i]++
-		}
-	}
-
-	return gutterWidth, cellWidths
 }

@@ -12,15 +12,29 @@ import (
 	"github.com/emersion/go-ical"
 )
 
-const caldavTestICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
-	"BEGIN:VEVENT&#13;\nUID:offsite-1&#13;\nDTSTART:20260707T100000Z&#13;\nDTEND:20260707T113000Z&#13;\n" +
-	"SUMMARY:Offsite&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
+const (
+	caldavTestICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
+		"BEGIN:VEVENT&#13;\nUID:offsite-1&#13;\nDTSTART:20260707T100000Z&#13;\nDTEND:20260707T113000Z&#13;\n" +
+		"SUMMARY:Offsite&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
 
-const caldavHollowICS = "BEGIN:VCALENDAR&#13;\nEND:VCALENDAR&#13;\n"
+	caldavHollowICS = "BEGIN:VCALENDAR&#13;\nEND:VCALENDAR&#13;\n"
 
-const caldavRecurringICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
-	"BEGIN:VEVENT&#13;\nUID:standup-1&#13;\nDTSTART:20260707T090000Z&#13;\nDTEND:20260707T093000Z&#13;\n" +
-	"SUMMARY:Standup&#13;\nRRULE:FREQ=DAILY&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
+	caldavRecurringICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
+		"BEGIN:VEVENT&#13;\nUID:standup-1&#13;\nDTSTART:20260707T090000Z&#13;\nDTEND:20260707T093000Z&#13;\n" +
+		"SUMMARY:Standup&#13;\nRRULE:FREQ=DAILY&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
+
+	caldavLateICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
+		"BEGIN:VEVENT&#13;\nUID:late-1&#13;\nDTSTART:20260707T233000Z&#13;\nDTEND:20260708T000000Z&#13;\n" +
+		"SUMMARY:Late show&#13;\nRRULE:FREQ=DAILY&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
+
+	caldavBydayICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
+		"BEGIN:VEVENT&#13;\nUID:byday-1&#13;\nDTSTART:20260706T090000Z&#13;\nDTEND:20260706T093000Z&#13;\n" +
+		"SUMMARY:Standup&#13;\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
+
+	caldavVidaICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
+		"BEGIN:VEVENT&#13;\nUID:vida-1&#13;\nDTSTART:20260709T180000Z&#13;\nDTEND:20260709T190000Z&#13;\n" +
+		"SUMMARY:Vida class&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
+)
 
 type caldavServerOptions struct {
 	wellKnownWorks     bool
@@ -31,21 +45,10 @@ type caldavServerOptions struct {
 	rejectWrites       bool
 	rejectDeletes      string
 	subscribedCalendar bool
+	emptyListing       bool
 }
 
-const caldavLateICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
-	"BEGIN:VEVENT&#13;\nUID:late-1&#13;\nDTSTART:20260707T233000Z&#13;\nDTEND:20260708T000000Z&#13;\n" +
-	"SUMMARY:Late show&#13;\nRRULE:FREQ=DAILY&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
-
-const caldavBydayICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
-	"BEGIN:VEVENT&#13;\nUID:byday-1&#13;\nDTSTART:20260706T090000Z&#13;\nDTEND:20260706T093000Z&#13;\n" +
-	"SUMMARY:Standup&#13;\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
-
-const caldavVidaICS = "BEGIN:VCALENDAR&#13;\nVERSION:2.0&#13;\nPRODID:-//test//test//EN&#13;\n" +
-	"BEGIN:VEVENT&#13;\nUID:vida-1&#13;\nDTSTART:20260709T180000Z&#13;\nDTEND:20260709T190000Z&#13;\n" +
-	"SUMMARY:Vida class&#13;\nEND:VEVENT&#13;\nEND:VCALENDAR&#13;\n"
-
-func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
+func caldavTestServer(t *testing.T, options caldavServerOptions) *httptest.Server {
 	t.Helper()
 
 	multistatus := func(w http.ResponseWriter, body string) {
@@ -84,7 +87,7 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 
 		switch r.Method + " " + requestPath {
 		case "PROPFIND /.well-known/caldav/":
-			if !opts.wellKnownWorks {
+			if !options.wellKnownWorks {
 				w.WriteHeader(http.StatusNotImplemented)
 
 				return
@@ -102,7 +105,7 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 		case "PROPFIND /cal/raj/":
 			body := calendarResponse("/cal/raj/work/", "Work")
 
-			if opts.subscribedCalendar {
+			if options.subscribedCalendar {
 				body += `<d:response><d:href>/cal/raj/vida/</d:href><d:propstat><d:prop>` +
 					`<d:resourcetype><d:collection/><cs:subscribed xmlns:cs="http://calendarserver.org/ns/"/></d:resourcetype>` +
 					`<d:displayname>Vida classes</d:displayname>` +
@@ -118,6 +121,14 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 			multistatus(w, calendarResponse("/onlycal/", "Direct"))
 
 		case "PROPFIND /cal/raj/work/":
+			if options.emptyListing {
+				multistatus(w, `<d:response><d:href>/cal/raj/work/</d:href><d:propstat><d:prop>`+
+					`<d:resourcetype><d:collection/></d:resourcetype>`+
+					`</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`)
+
+				return
+			}
+
 			multistatus(w, `<d:response><d:href>/cal/raj/work/</d:href><d:propstat><d:prop>`+
 				`<d:resourcetype><d:collection/></d:resourcetype>`+
 				`</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`+
@@ -131,7 +142,7 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 			requestBody, _ := io.ReadAll(r.Body)
 
 			if strings.Contains(string(requestBody), "calendar-multiget") {
-				if opts.queryMode == "multiget" {
+				if options.queryMode == "multiget" {
 					multistatus(w, eventReport(requestPath+"offsite-1.ics", caldavTestICS))
 				} else {
 					w.WriteHeader(http.StatusNotImplemented)
@@ -141,23 +152,31 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 			}
 
 			switch {
-			case opts.queryMode == "icloud" && strings.Contains(string(requestBody), "allcomp"):
+			case options.queryMode == "icloud" && strings.Contains(string(requestBody), "allcomp"):
 				multistatus(w, eventReport(requestPath+"offsite-1.ics", caldavHollowICS))
 
-			case opts.queryMode == "icloud", opts.queryMode == "inline":
+			case options.queryMode == "icloud", options.queryMode == "inline":
 				multistatus(w, eventReport(requestPath+"offsite-1.ics", caldavTestICS))
 
-			case opts.queryMode == "recurring":
+			case options.queryMode == "recurring":
 				multistatus(w, eventReport(requestPath+"standup-1.ics", caldavRecurringICS))
 
-			case opts.queryMode == "late":
+			case options.queryMode == "late":
 				multistatus(w, eventReport(requestPath+"late-1.ics", caldavLateICS))
 
-			case opts.queryMode == "byday":
+			case options.queryMode == "byday":
 				multistatus(w, eventReport(requestPath+"byday-1.ics", caldavBydayICS))
 
-			case opts.queryMode == "hollow":
+			case options.queryMode == "hollow":
 				multistatus(w, eventReport(requestPath+"offsite-1.ics", caldavHollowICS))
+
+			case options.queryMode == "truncated":
+				w.Header().Set("Content-Type", "text/xml; charset=utf-8")
+				w.WriteHeader(http.StatusMultiStatus)
+				fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>`+
+					`<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">`+
+					eventReport(requestPath+"offsite-1.ics", caldavTestICS)+
+					`<d:response><d:href>`)
 
 			default:
 				multistatus(w, `<d:response><d:href>`+requestPath+`offsite-1.ics</d:href>`+
@@ -174,15 +193,15 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 		default:
 			if r.Method == http.MethodPut && strings.HasPrefix(requestPath, "/cal/raj/work/") {
 				putBody, _ := io.ReadAll(r.Body)
-				if opts.putBodies != nil {
-					*opts.putBodies = append(*opts.putBodies, string(putBody))
+				if options.putBodies != nil {
+					*options.putBodies = append(*options.putBodies, string(putBody))
 				}
 
-				if opts.putHeaders != nil {
-					*opts.putHeaders = append(*opts.putHeaders, r.Header.Clone())
+				if options.putHeaders != nil {
+					*options.putHeaders = append(*options.putHeaders, r.Header.Clone())
 				}
 
-				if opts.rejectWrites {
+				if options.rejectWrites {
 					w.WriteHeader(http.StatusPreconditionFailed)
 
 					return
@@ -195,13 +214,13 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 			}
 
 			if r.Method == http.MethodDelete && strings.HasPrefix(requestPath, "/cal/raj/work/") {
-				if opts.deleteHeaders != nil {
-					*opts.deleteHeaders = append(*opts.deleteHeaders, r.Header.Clone())
+				if options.deleteHeaders != nil {
+					*options.deleteHeaders = append(*options.deleteHeaders, r.Header.Clone())
 				}
 
-				rejected := opts.rejectWrites ||
-					opts.rejectDeletes == "all" ||
-					(opts.rejectDeletes == "original" && strings.Contains(requestPath, "offsite-1"))
+				rejected := options.rejectWrites ||
+					options.rejectDeletes == "all" ||
+					(options.rejectDeletes == "original" && strings.Contains(requestPath, "offsite-1"))
 
 				if rejected {
 					w.WriteHeader(http.StatusPreconditionFailed)
@@ -217,6 +236,40 @@ func caldavTestServer(t *testing.T, opts caldavServerOptions) *httptest.Server {
 			w.WriteHeader(http.StatusNotImplemented)
 		}
 	}))
+}
+
+func fetchedCaldavClientAt(t *testing.T, serverURL string, location *time.Location, from, to time.Time) (*caldavClient, []Calendar, []Event) {
+	t.Helper()
+
+	account := Account{
+		Name:     "work",
+		Type:     "caldav",
+		URL:      serverURL,
+		Username: "raj@example.com",
+	}
+
+	client, err := newCaldavClient(account, "app-password", location)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	calendars, events, err := client.fetch(from, to)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return client, calendars, events
+}
+
+func fetchedCaldavClient(t *testing.T, options caldavServerOptions, urlPath string, location *time.Location, from, to time.Time) (*caldavClient, []Calendar, []Event) {
+	t.Helper()
+
+	server := caldavTestServer(t, options)
+	t.Cleanup(server.Close)
+
+	return fetchedCaldavClientAt(t, server.URL+urlPath, location, from, to)
 }
 
 func TestCaldavDiscoveryLadder(t *testing.T) {
@@ -264,42 +317,35 @@ func TestCaldavDiscoveryLadder(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			server := caldavTestServer(t, c.options)
-			defer server.Close()
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, calendars, events := fetchedCaldavClient(t, testCase.options, testCase.urlPath, time.UTC,
+				time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC))
 
-			account := Account{
-				Name:     "zoho",
-				Type:     "caldav",
-				URL:      server.URL + c.urlPath,
-				Username: "raj@example.com",
-			}
-
-			client, err := newCaldavClient(account, "app-password", time.UTC)
-
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-			to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-
-			calendars, events, err := client.fetch(from, to)
-
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if len(calendars) != 1 || calendars[0].Name != c.wantCalendar {
-				t.Fatalf("want calendar %q, got %+v", c.wantCalendar, calendars)
+			if len(calendars) != 1 || calendars[0].Name != testCase.wantCalendar {
+				t.Fatalf("want calendar %q, got %+v", testCase.wantCalendar, calendars)
 			}
 
 			if len(events) != 1 || events[0].Title != "Offsite" {
 				t.Fatalf("want the Offsite event, got %+v", events)
 			}
 		})
+	}
+}
+
+func TestCaldavPartialQueryResultsAreDiscarded(t *testing.T) {
+	_, calendars, events := fetchedCaldavClient(t, caldavServerOptions{
+		wellKnownWorks: true,
+		queryMode:      "truncated",
+		emptyListing:   true,
+	}, "", time.UTC, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	if len(calendars) != 1 || calendars[0].Name != "Work" {
+		t.Fatalf("want the Work calendar, got %+v", calendars)
+	}
+
+	if len(events) != 0 {
+		t.Fatalf("want the failed query's partial results discarded, got %+v", events)
 	}
 }
 
@@ -342,12 +388,12 @@ func TestCaldavGuards(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			err := c.action()
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := testCase.action()
 
-			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Fatalf("want error containing %q, got %v", c.wantErr, err)
+			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("want error containing %q, got %v", testCase.wantErr, err)
 			}
 		})
 	}
@@ -356,33 +402,11 @@ func TestCaldavGuards(t *testing.T) {
 func TestCaldavCreateAgainstQuirkyServer(t *testing.T) {
 	var putBodies []string
 
-	server := caldavTestServer(t, caldavServerOptions{
+	client, _, _ := fetchedCaldavClient(t, caldavServerOptions{
 		wellKnownWorks: true,
 		queryMode:      "get",
 		putBodies:      &putBodies,
-	})
-	defer server.Close()
-
-	account := Account{
-		Name:     "zoho",
-		Type:     "caldav",
-		URL:      server.URL,
-		Username: "raj@example.com",
-	}
-
-	client, err := newCaldavClient(account, "app-password", time.UTC)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	if _, _, err := client.fetch(from, to); err != nil {
-		t.Fatal(err)
-	}
+	}, "", time.UTC, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	created, err := client.create(Event{
 		Title:    "Planning",
@@ -445,32 +469,32 @@ func TestApplyEventProps(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
 			icalEvent := ical.NewEvent()
 
-			applyEventProps(icalEvent, c.event)
+			applyEventProps(icalEvent, testCase.event)
 
 			startProp := icalEvent.Props.Get(ical.PropDateTimeStart)
 
 			endProp := icalEvent.Props.Get(ical.PropDateTimeEnd)
 
-			if startProp.ValueType() != c.wantValueType {
-				t.Errorf("want start value type %v, got %v", c.wantValueType, startProp.ValueType())
+			if startProp.ValueType() != testCase.wantValueType {
+				t.Errorf("want start value type %v, got %v", testCase.wantValueType, startProp.ValueType())
 			}
 
-			if startProp.Value != c.wantStart {
-				t.Errorf("want start %q, got %q", c.wantStart, startProp.Value)
+			if startProp.Value != testCase.wantStart {
+				t.Errorf("want start %q, got %q", testCase.wantStart, startProp.Value)
 			}
 
-			if endProp.Value != c.wantEnd {
-				t.Errorf("want end %q, got %q", c.wantEnd, endProp.Value)
+			if endProp.Value != testCase.wantEnd {
+				t.Errorf("want end %q, got %q", testCase.wantEnd, endProp.Value)
 			}
 
 			title, err := icalEvent.Props.Text(ical.PropSummary)
 
-			if err != nil || title != c.event.Title {
-				t.Errorf("want summary %q, got %q (%v)", c.event.Title, title, err)
+			if err != nil || title != testCase.event.Title {
+				t.Errorf("want summary %q, got %q (%v)", testCase.event.Title, title, err)
 			}
 		})
 	}
@@ -485,137 +509,109 @@ func TestCaldavConditionalWrites(t *testing.T) {
 		End:      time.Date(2026, 7, 7, 11, 30, 0, 0, time.UTC),
 	}
 
-	fetchAgainst := func(t *testing.T, opts caldavServerOptions) (*caldavClient, func()) {
-		t.Helper()
+	cases := []struct {
+		name            string
+		queryMode       string
+		rejectWrites    bool
+		operation       func(client *caldavClient) error
+		wantDelete      bool
+		wantIfMatch     string
+		wantIfNoneMatch string
+		wantErr         string
+	}{
+		{
+			name:        "update sends the strong etag as if-match",
+			queryMode:   "inline",
+			operation:   func(client *caldavClient) error { return client.update(fetchedEvent) },
+			wantIfMatch: `"etag-1"`,
+		},
+		{
+			name:      "weak etag from the download fallback stays unconditional",
+			queryMode: "get",
+			operation: func(client *caldavClient) error { return client.update(fetchedEvent) },
+		},
+		{
+			name:      "create refuses to overwrite an existing object",
+			queryMode: "inline",
+			operation: func(client *caldavClient) error {
+				_, err := client.create(Event{Title: "Planning", Calendar: "Work", Start: fetchedEvent.Start, End: fetchedEvent.End})
 
-		server := caldavTestServer(t, opts)
-
-		account := Account{
-			Name:     "work",
-			Type:     "caldav",
-			URL:      server.URL,
-			Username: "raj@example.com",
-		}
-
-		client, err := newCaldavClient(account, "app-password", time.UTC)
-
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-		to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-
-		if _, _, err := client.fetch(from, to); err != nil {
-			t.Fatal(err)
-		}
-
-		return client, server.Close
+				return err
+			},
+			wantIfNoneMatch: "*",
+		},
+		{
+			name:        "delete sends the strong etag as if-match",
+			queryMode:   "inline",
+			operation:   func(client *caldavClient) error { return client.remove("offsite-1") },
+			wantDelete:  true,
+			wantIfMatch: `"etag-1"`,
+		},
+		{
+			name:         "precondition failure on update asks the user to refresh",
+			queryMode:    "inline",
+			rejectWrites: true,
+			operation:    func(client *caldavClient) error { return client.update(fetchedEvent) },
+			wantErr:      "refresh and try again",
+		},
+		{
+			name:         "precondition failure on delete asks the user to refresh",
+			queryMode:    "inline",
+			rejectWrites: true,
+			operation:    func(client *caldavClient) error { return client.remove("offsite-1") },
+			wantErr:      "refresh and try again",
+		},
 	}
 
-	t.Run("update sends the strong etag as if-match", func(t *testing.T) {
-		var putHeaders []http.Header
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var putHeaders, deleteHeaders []http.Header
 
-		client, close := fetchAgainst(t, caldavServerOptions{
-			wellKnownWorks: true,
-			queryMode:      "inline",
-			putHeaders:     &putHeaders,
+			client, _, _ := fetchedCaldavClient(t, caldavServerOptions{
+				wellKnownWorks: true,
+				queryMode:      testCase.queryMode,
+				rejectWrites:   testCase.rejectWrites,
+				putHeaders:     &putHeaders,
+				deleteHeaders:  &deleteHeaders,
+			}, "", time.UTC, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC))
+
+			err := testCase.operation(client)
+
+			if testCase.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+					t.Fatalf("want error containing %q, got %v", testCase.wantErr, err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			writeHeaders, otherHeaders := putHeaders, deleteHeaders
+
+			if testCase.wantDelete {
+				writeHeaders, otherHeaders = deleteHeaders, putHeaders
+			}
+
+			if len(otherHeaders) != 0 {
+				t.Fatalf("want the write to use the expected method only, got %d puts and %d deletes", len(putHeaders), len(deleteHeaders))
+			}
+
+			if len(writeHeaders) != 1 {
+				t.Fatalf("want one write request, got %d puts and %d deletes", len(putHeaders), len(deleteHeaders))
+			}
+
+			if writeHeaders[0].Get("If-Match") != testCase.wantIfMatch {
+				t.Errorf("want If-Match %q, got %q", testCase.wantIfMatch, writeHeaders[0].Get("If-Match"))
+			}
+
+			if writeHeaders[0].Get("If-None-Match") != testCase.wantIfNoneMatch {
+				t.Errorf("want If-None-Match %q, got %q", testCase.wantIfNoneMatch, writeHeaders[0].Get("If-None-Match"))
+			}
 		})
-		defer close()
-
-		if err := client.update(fetchedEvent); err != nil {
-			t.Fatal(err)
-		}
-
-		if len(putHeaders) != 1 || putHeaders[0].Get("If-Match") != `"etag-1"` {
-			t.Fatalf("want If-Match %q, got %+v", `"etag-1"`, putHeaders)
-		}
-
-		if putHeaders[0].Get("If-None-Match") != "" {
-			t.Fatal("want no If-None-Match on update")
-		}
-	})
-
-	t.Run("weak etag from the download fallback stays unconditional", func(t *testing.T) {
-		var putHeaders []http.Header
-
-		client, close := fetchAgainst(t, caldavServerOptions{
-			wellKnownWorks: true,
-			queryMode:      "get",
-			putHeaders:     &putHeaders,
-		})
-		defer close()
-
-		if err := client.update(fetchedEvent); err != nil {
-			t.Fatal(err)
-		}
-
-		if len(putHeaders) != 1 || putHeaders[0].Get("If-Match") != "" {
-			t.Fatalf("want no If-Match for a weak etag, got %+v", putHeaders)
-		}
-	})
-
-	t.Run("create refuses to overwrite an existing object", func(t *testing.T) {
-		var putHeaders []http.Header
-
-		client, close := fetchAgainst(t, caldavServerOptions{
-			wellKnownWorks: true,
-			queryMode:      "inline",
-			putHeaders:     &putHeaders,
-		})
-		defer close()
-
-		if _, err := client.create(Event{Title: "Planning", Calendar: "Work", Start: fetchedEvent.Start, End: fetchedEvent.End}); err != nil {
-			t.Fatal(err)
-		}
-
-		if len(putHeaders) != 1 || putHeaders[0].Get("If-None-Match") != "*" {
-			t.Fatalf("want If-None-Match *, got %+v", putHeaders)
-		}
-
-		if putHeaders[0].Get("If-Match") != "" {
-			t.Fatal("want no If-Match on create")
-		}
-	})
-
-	t.Run("delete sends the strong etag as if-match", func(t *testing.T) {
-		var deleteHeaders []http.Header
-
-		client, close := fetchAgainst(t, caldavServerOptions{
-			wellKnownWorks: true,
-			queryMode:      "inline",
-			deleteHeaders:  &deleteHeaders,
-		})
-		defer close()
-
-		if err := client.remove("offsite-1"); err != nil {
-			t.Fatal(err)
-		}
-
-		if len(deleteHeaders) != 1 || deleteHeaders[0].Get("If-Match") != `"etag-1"` {
-			t.Fatalf("want If-Match %q, got %+v", `"etag-1"`, deleteHeaders)
-		}
-	})
-
-	t.Run("precondition failures ask the user to refresh", func(t *testing.T) {
-		client, close := fetchAgainst(t, caldavServerOptions{
-			wellKnownWorks: true,
-			queryMode:      "inline",
-			rejectWrites:   true,
-		})
-		defer close()
-
-		err := client.update(fetchedEvent)
-
-		if err == nil || !strings.Contains(err.Error(), "refresh and try again") {
-			t.Fatalf("want a refresh-and-retry error on 412, got %v", err)
-		}
-
-		if err := client.remove("offsite-1"); err == nil || !strings.Contains(err.Error(), "refresh and try again") {
-			t.Fatalf("want a refresh-and-retry error on delete 412, got %v", err)
-		}
-	})
+	}
 }
 
 func TestCaldavMoveRollsBackOnFailedDelete(t *testing.T) {
@@ -653,53 +649,31 @@ func TestCaldavMoveRollsBackOnFailedDelete(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
 			var deleteHeaders []http.Header
 
-			server := caldavTestServer(t, caldavServerOptions{
+			client, _, _ := fetchedCaldavClient(t, caldavServerOptions{
 				wellKnownWorks: true,
 				queryMode:      "inline",
 				deleteHeaders:  &deleteHeaders,
-				rejectDeletes:  c.rejectMode,
-			})
-			defer server.Close()
-
-			account := Account{
-				Name:     "work",
-				Type:     "caldav",
-				URL:      server.URL,
-				Username: "raj@example.com",
-			}
-
-			client, err := newCaldavClient(account, "app-password", time.UTC)
-
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-			to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-
-			if _, _, err := client.fetch(from, to); err != nil {
-				t.Fatal(err)
-			}
+				rejectDeletes:  testCase.rejectMode,
+			}, "", time.UTC, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC))
 
 			client.calendarPaths["Personal"] = "/cal/raj/work/"
 
-			err = client.update(movedEvent)
+			err := client.update(movedEvent)
 
-			if c.wantErr == "" {
+			if testCase.wantErr == "" {
 				if err != nil {
 					t.Fatal(err)
 				}
-			} else if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Fatalf("want error containing %q, got %v", c.wantErr, err)
+			} else if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("want error containing %q, got %v", testCase.wantErr, err)
 			}
 
-			if len(deleteHeaders) != c.wantDeletes {
-				t.Errorf("want %d delete requests, got %d", c.wantDeletes, len(deleteHeaders))
+			if len(deleteHeaders) != testCase.wantDeletes {
+				t.Errorf("want %d delete requests, got %d", testCase.wantDeletes, len(deleteHeaders))
 			}
 		})
 	}
@@ -720,51 +694,27 @@ func TestCaldavRecurringWrites(t *testing.T) {
 		Recurrence: Recurrence{Frequency: "daily", Interval: 1},
 	}
 
-	recurringClientFor := func(t *testing.T, putBodies *[]string, deleteHeaders *[]http.Header) (*caldavClient, func()) {
+	recurringClientFor := func(t *testing.T, putBodies *[]string, deleteHeaders *[]http.Header) *caldavClient {
 		t.Helper()
 
-		server := caldavTestServer(t, caldavServerOptions{
+		client, _, events := fetchedCaldavClient(t, caldavServerOptions{
 			wellKnownWorks: true,
 			queryMode:      "recurring",
 			putBodies:      putBodies,
 			deleteHeaders:  deleteHeaders,
-		})
-
-		account := Account{
-			Name:     "work",
-			Type:     "caldav",
-			URL:      server.URL,
-			Username: "raj@example.com",
-		}
-
-		client, err := newCaldavClient(account, "app-password", time.UTC)
-
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-
-		to := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-
-		_, events, err := client.fetch(from, to)
-
-		if err != nil {
-			t.Fatal(err)
-		}
+		}, "", time.UTC, time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
 
 		if len(events) < 10 {
 			t.Fatalf("want expanded daily instances, got %d", len(events))
 		}
 
-		return client, server.Close
+		return client
 	}
 
 	t.Run("delete one occurrence writes an exdate", func(t *testing.T) {
 		var putBodies []string
 
-		client, close := recurringClientFor(t, &putBodies, nil)
-		defer close()
+		client := recurringClientFor(t, &putBodies, nil)
 
 		if err := client.removeOccurrence(instanceID); err != nil {
 			t.Fatal(err)
@@ -782,8 +732,7 @@ func TestCaldavRecurringWrites(t *testing.T) {
 	t.Run("edit one occurrence appends an override", func(t *testing.T) {
 		var putBodies []string
 
-		client, close := recurringClientFor(t, &putBodies, nil)
-		defer close()
+		client := recurringClientFor(t, &putBodies, nil)
 
 		moved := occurrenceEvent
 		moved.Title = "Moved standup"
@@ -812,8 +761,7 @@ func TestCaldavRecurringWrites(t *testing.T) {
 	t.Run("series edit keeps an untouched rule and master date", func(t *testing.T) {
 		var putBodies []string
 
-		client, close := recurringClientFor(t, &putBodies, nil)
-		defer close()
+		client := recurringClientFor(t, &putBodies, nil)
 
 		renamed := occurrenceEvent
 		renamed.Title = "Renamed standup"
@@ -832,8 +780,7 @@ func TestCaldavRecurringWrites(t *testing.T) {
 	t.Run("series time edit shifts the master but not its date", func(t *testing.T) {
 		var putBodies []string
 
-		client, close := recurringClientFor(t, &putBodies, nil)
-		defer close()
+		client := recurringClientFor(t, &putBodies, nil)
 
 		shifted := occurrenceEvent
 		shifted.Start = julyEighth.Add(5 * time.Hour)
@@ -853,8 +800,7 @@ func TestCaldavRecurringWrites(t *testing.T) {
 	t.Run("series delete removes the object", func(t *testing.T) {
 		var deleteHeaders []http.Header
 
-		client, close := recurringClientFor(t, nil, &deleteHeaders)
-		defer close()
+		client := recurringClientFor(t, nil, &deleteHeaders)
 
 		if err := client.removeSeries(instanceID); err != nil {
 			t.Fatal(err)
@@ -866,8 +812,7 @@ func TestCaldavRecurringWrites(t *testing.T) {
 	})
 
 	t.Run("plain update and remove still refuse recurring events", func(t *testing.T) {
-		client, close := recurringClientFor(t, nil, nil)
-		defer close()
+		client := recurringClientFor(t, nil, nil)
 
 		if err := client.update(occurrenceEvent); err == nil || !strings.Contains(err.Error(), "read-only") {
 			t.Fatalf("want the plain update guard, got %v", err)
@@ -917,79 +862,37 @@ func TestCaldavCreateRecurringEvent(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
 			var putBodies []string
 
-			server := caldavTestServer(t, caldavServerOptions{
+			client, _, _ := fetchedCaldavClient(t, caldavServerOptions{
 				wellKnownWorks: true,
 				queryMode:      "inline",
 				putBodies:      &putBodies,
-			})
-			defer server.Close()
+			}, "", time.UTC, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC))
 
-			account := Account{
-				Name:     "work",
-				Type:     "caldav",
-				URL:      server.URL,
-				Username: "raj@example.com",
-			}
-
-			client, err := newCaldavClient(account, "app-password", time.UTC)
-
-			if err != nil {
+			if _, err := client.create(testCase.event); err != nil {
 				t.Fatal(err)
 			}
 
-			from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-			to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-
-			if _, _, err := client.fetch(from, to); err != nil {
-				t.Fatal(err)
-			}
-
-			if _, err := client.create(c.event); err != nil {
-				t.Fatal(err)
-			}
-
-			if len(putBodies) != 1 || !strings.Contains(putBodies[0], c.wantRule) {
-				t.Fatalf("want uploaded event to contain %q, got %q", c.wantRule, putBodies)
+			if len(putBodies) != 1 || !strings.Contains(putBodies[0], testCase.wantRule) {
+				t.Fatalf("want uploaded event to contain %q, got %q", testCase.wantRule, putBodies)
 			}
 		})
 	}
 }
 
 func TestCaldavSubscribedCalendars(t *testing.T) {
-	server := caldavTestServer(t, caldavServerOptions{
-		wellKnownWorks:     true,
-		queryMode:          "inline",
-		subscribedCalendar: true,
-	})
-	defer server.Close()
-
-	account := Account{
-		Name:     "icloud",
-		Type:     "caldav",
-		URL:      server.URL,
-		Username: "raj@example.com",
-	}
-
-	client, err := newCaldavClient(account, "app-password", time.UTC)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	calendars, events, err := client.fetch(from, to)
-
-	if err != nil {
-		t.Fatal(err)
-	}
+	client, calendars, events := fetchedCaldavClient(t, caldavServerOptions{
+		wellKnownWorks:     true,
+		queryMode:          "inline",
+		subscribedCalendar: true,
+	}, "", time.UTC, from, to)
 
 	if len(calendars) != 2 {
 		t.Fatalf("want Work and Vida classes, got %+v", calendars)
@@ -1010,7 +913,7 @@ func TestCaldavSubscribedCalendars(t *testing.T) {
 		t.Fatalf("want the subscribed calendar's events fetched, got %+v", events)
 	}
 
-	_, err = client.create(Event{Title: "Blocked", Calendar: "Vida classes", Start: from, End: from.Add(time.Hour)})
+	_, err := client.create(Event{Title: "Blocked", Calendar: "Vida classes", Start: from, End: from.Add(time.Hour)})
 
 	if err == nil || !strings.Contains(err.Error(), "read-only subscription") {
 		t.Fatalf("want creates into the subscription refused, got %v", err)
@@ -1053,28 +956,11 @@ func TestCaldavCrossHostDiscovery(t *testing.T) {
 	}))
 	defer gateway.Close()
 
-	account := Account{
-		Name:     "icloud",
-		Type:     "caldav",
-		URL:      gateway.URL,
-		Username: "raj@example.com",
-	}
-
-	client, err := newCaldavClient(account, "app-password", time.UTC)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	calendars, events, err := client.fetch(from, to)
-
-	if err != nil {
-		t.Fatal(err)
-	}
+	client, calendars, events := fetchedCaldavClientAt(t, gateway.URL, time.UTC, from, to)
 
 	if len(calendars) != 1 || calendars[0].Name != "Work" {
 		t.Fatalf("want the partition host's Work calendar, got %+v", calendars)
@@ -1100,79 +986,139 @@ func TestCaldavSeriesEditAcrossZones(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	clientFor := func(t *testing.T, queryMode string, putBodies *[]string) *caldavClient {
-		t.Helper()
+	lateOccurrence := time.Date(2026, 7, 8, 23, 30, 0, 0, time.UTC)
 
-		server := caldavTestServer(t, caldavServerOptions{
-			wellKnownWorks: true,
-			queryMode:      queryMode,
-			putBodies:      putBodies,
-		})
-		t.Cleanup(server.Close)
+	bydayOccurrence := time.Date(2026, 7, 6, 9, 0, 0, 0, time.UTC)
 
-		account := Account{Name: "work", Type: "caldav", URL: server.URL, Username: "raj@example.com"}
+	standupOccurrence := time.Date(2026, 7, 8, 9, 0, 0, 0, time.UTC)
 
-		client, err := newCaldavClient(account, "app-password", stockholm)
-
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-
-		to := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-
-		if _, _, err := client.fetch(from, to); err != nil {
-			t.Fatal(err)
-		}
-
-		return client
+	cases := []struct {
+		name         string
+		queryMode    string
+		event        Event
+		wantContains []string
+		wantMissing  []string
+		wantErr      string
+	}{
+		{
+			name:      "title edit keeps the series anchored when utc and local dates differ",
+			queryMode: "late",
+			event: Event{
+				ID:         fmt.Sprintf("late-1@%d", lateOccurrence.Unix()),
+				Title:      "Renamed late show",
+				Calendar:   "Work",
+				Start:      lateOccurrence.In(stockholm),
+				End:        lateOccurrence.Add(30 * time.Minute).In(stockholm),
+				Recurring:  true,
+				Recurrence: Recurrence{Frequency: "daily", Interval: 1},
+			},
+			wantContains: []string{"DTSTART;TZID=Europe/Stockholm:20260708T013000", "RRULE:FREQ=DAILY"},
+		},
+		{
+			name:      "rename keeps a byday rule the form cannot edit",
+			queryMode: "byday",
+			event: Event{
+				ID:         fmt.Sprintf("byday-1@%d", bydayOccurrence.Unix()),
+				Title:      "Renamed standup",
+				Calendar:   "Work",
+				Start:      bydayOccurrence.In(stockholm),
+				End:        bydayOccurrence.Add(30 * time.Minute).In(stockholm),
+				Recurring:  true,
+				Recurrence: Recurrence{Frequency: "weekly", Interval: 1},
+			},
+			wantContains: []string{"BYDAY=MO,WE,FR"},
+		},
+		{
+			name:      "rule edit on a byday rule is refused",
+			queryMode: "byday",
+			event: Event{
+				ID:        fmt.Sprintf("byday-1@%d", bydayOccurrence.Unix()),
+				Title:     "Renamed standup",
+				Calendar:  "Work",
+				Start:     bydayOccurrence.In(stockholm),
+				End:       bydayOccurrence.Add(30 * time.Minute).In(stockholm),
+				Recurring: true,
+				Recurrence: Recurrence{
+					Frequency: "weekly",
+					Interval:  1,
+					Until:     time.Date(2026, 9, 1, 0, 0, 0, 0, stockholm),
+				},
+			},
+			wantErr: "cannot edit",
+		},
+		{
+			name:      "turning repeat off deletes the rule",
+			queryMode: "recurring",
+			event: Event{
+				ID:        fmt.Sprintf("standup-1@%d", standupOccurrence.Unix()),
+				Title:     "Standup",
+				Calendar:  "Work",
+				Start:     standupOccurrence.In(stockholm),
+				End:       standupOccurrence.Add(30 * time.Minute).In(stockholm),
+				Recurring: true,
+			},
+			wantMissing: []string{"RRULE"},
+		},
 	}
 
-	t.Run("title edit keeps the series anchored when utc and local dates differ", func(t *testing.T) {
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var putBodies []string
+
+			client, _, _ := fetchedCaldavClient(t, caldavServerOptions{
+				wellKnownWorks: true,
+				queryMode:      testCase.queryMode,
+				putBodies:      &putBodies,
+			}, "", stockholm, time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+
+			err := client.updateSeries(testCase.event)
+
+			if testCase.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+					t.Fatalf("want error containing %q, got %v", testCase.wantErr, err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if len(putBodies) != 1 {
+				t.Fatalf("want one upload, got %d", len(putBodies))
+			}
+
+			for _, wanted := range testCase.wantContains {
+				if !strings.Contains(putBodies[0], wanted) {
+					t.Errorf("want uploaded master to contain %q, got %q", wanted, putBodies[0])
+				}
+			}
+
+			for _, unwanted := range testCase.wantMissing {
+				if strings.Contains(putBodies[0], unwanted) {
+					t.Errorf("want uploaded master without %q, got %q", unwanted, putBodies[0])
+				}
+			}
+		})
+	}
+
+	t.Run("rule edit on a byday rule is still refused after a rename on the same client", func(t *testing.T) {
 		var putBodies []string
 
-		client := clientFor(t, "late", &putBodies)
-
-		occurrence := time.Date(2026, 7, 8, 23, 30, 0, 0, time.UTC)
-
-		renamed := Event{
-			ID:        fmt.Sprintf("late-1@%d", occurrence.Unix()),
-			Title:     "Renamed late show",
-			Calendar:  "Work",
-			Start:     occurrence.In(stockholm),
-			End:       occurrence.Add(30 * time.Minute).In(stockholm),
-			Recurring: true,
-			Recurrence: Recurrence{Frequency: "daily", Interval: 1},
-		}
-
-		if err := client.updateSeries(renamed); err != nil {
-			t.Fatal(err)
-		}
-
-		if !strings.Contains(putBodies[0], "DTSTART;TZID=Europe/Stockholm:20260708T013000") {
-			t.Fatalf("want the master anchored to its original instant with a TZID, got %q", putBodies[0])
-		}
-
-		if !strings.Contains(putBodies[0], "RRULE:FREQ=DAILY") {
-			t.Fatalf("want the rule untouched, got %q", putBodies[0])
-		}
-	})
-
-	t.Run("rules beyond the form refuse edits but allow renames", func(t *testing.T) {
-		var putBodies []string
-
-		client := clientFor(t, "byday", &putBodies)
-
-		occurrence := time.Date(2026, 7, 6, 9, 0, 0, 0, time.UTC)
+		client, _, _ := fetchedCaldavClient(t, caldavServerOptions{
+			wellKnownWorks: true,
+			queryMode:      "byday",
+			putBodies:      &putBodies,
+		}, "", stockholm, time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
 
 		renamed := Event{
-			ID:        fmt.Sprintf("byday-1@%d", occurrence.Unix()),
-			Title:     "Renamed standup",
-			Calendar:  "Work",
-			Start:     occurrence.In(stockholm),
-			End:       occurrence.Add(30 * time.Minute).In(stockholm),
-			Recurring: true,
+			ID:         fmt.Sprintf("byday-1@%d", bydayOccurrence.Unix()),
+			Title:      "Renamed standup",
+			Calendar:   "Work",
+			Start:      bydayOccurrence.In(stockholm),
+			End:        bydayOccurrence.Add(30 * time.Minute).In(stockholm),
+			Recurring:  true,
 			Recurrence: Recurrence{Frequency: "weekly", Interval: 1},
 		}
 
@@ -1180,8 +1126,8 @@ func TestCaldavSeriesEditAcrossZones(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if !strings.Contains(putBodies[0], "BYDAY=MO,WE,FR") {
-			t.Fatalf("want the byday rule preserved on a rename, got %q", putBodies[0])
+		if len(putBodies) != 1 || !strings.Contains(putBodies[0], "BYDAY=MO,WE,FR") {
+			t.Fatalf("want the rename to keep the byday rule, got %q", putBodies)
 		}
 
 		bounded := renamed
@@ -1190,32 +1136,11 @@ func TestCaldavSeriesEditAcrossZones(t *testing.T) {
 		err := client.updateSeries(bounded)
 
 		if err == nil || !strings.Contains(err.Error(), "cannot edit") {
-			t.Fatalf("want rule edits refused on byday rules, got %v", err)
-		}
-	})
-
-	t.Run("turning repeat off deletes the rule", func(t *testing.T) {
-		var putBodies []string
-
-		client := clientFor(t, "recurring", &putBodies)
-
-		occurrence := time.Date(2026, 7, 8, 9, 0, 0, 0, time.UTC)
-
-		single := Event{
-			ID:        fmt.Sprintf("standup-1@%d", occurrence.Unix()),
-			Title:     "Standup",
-			Calendar:  "Work",
-			Start:     occurrence.In(stockholm),
-			End:       occurrence.Add(30 * time.Minute).In(stockholm),
-			Recurring: true,
+			t.Fatalf("want the rule edit refused after the rename, got %v", err)
 		}
 
-		if err := client.updateSeries(single); err != nil {
-			t.Fatal(err)
-		}
-
-		if strings.Contains(putBodies[0], "RRULE") {
-			t.Fatalf("want the rule removed when repeat is turned off, got %q", putBodies[0])
+		if len(putBodies) != 1 {
+			t.Fatalf("want no upload from the refused edit, got %d", len(putBodies))
 		}
 	})
 }
@@ -1229,28 +1154,11 @@ func TestCaldavCreateRecurringWithZone(t *testing.T) {
 
 	var putBodies []string
 
-	server := caldavTestServer(t, caldavServerOptions{
+	client, _, _ := fetchedCaldavClient(t, caldavServerOptions{
 		wellKnownWorks: true,
 		queryMode:      "inline",
 		putBodies:      &putBodies,
-	})
-	defer server.Close()
-
-	account := Account{Name: "work", Type: "caldav", URL: server.URL, Username: "raj@example.com"}
-
-	client, err := newCaldavClient(account, "app-password", stockholm)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	to := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	if _, _, err := client.fetch(from, to); err != nil {
-		t.Fatal(err)
-	}
+	}, "", stockholm, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	weekly := Event{
 		Title:      "Climbing",

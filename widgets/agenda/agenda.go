@@ -2,6 +2,7 @@ package agenda
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -33,7 +34,6 @@ type Model struct {
 	location           *time.Location
 	anchorDate         time.Time
 	selectedEventIndex int
-	scrollOffset       int
 	yankedEventID      string
 	width              int
 	height             int
@@ -76,7 +76,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.anchorDate = time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, m.location)
 		m.selectedEventIndex = -1
-		m.scrollOffset = 0
 
 		return m, nil
 
@@ -91,27 +90,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		events := m.upcomingEvents()
-
 		switch msg.String() {
 		case "j", "down", "tab":
-			return m.selected(events, m.selectedEventIndex+1)
+			return m.withSelectedIndex(m.selectedEventIndex + 1)
 
 		case "k", "up", "shift+tab":
-			return m.selected(events, m.selectedEventIndex-1)
+			return m.withSelectedIndex(m.selectedEventIndex - 1)
 
 		case "ctrl+d":
-			return m.selected(events, m.selectedEventIndex+max(1, m.height/3))
+			return m.withSelectedIndex(m.selectedEventIndex + max(1, m.height/3))
 
 		case "ctrl+u":
-			return m.selected(events, m.selectedEventIndex-max(1, m.height/3))
+			return m.withSelectedIndex(m.selectedEventIndex - max(1, m.height/3))
 
 		case "t":
 			now := time.Now().In(m.location)
 
 			m.anchorDate = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, m.location)
 			m.selectedEventIndex = -1
-			m.scrollOffset = 0
 
 			return m, func() tea.Msg { return msgs.EventSelectedMsg{} }
 
@@ -144,7 +140,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			return m, func() tea.Msg { return msgs.OpenEventFormMsg{Event: template, IsNew: true} }
 
-		case "e":
+		case "e", "d", "y":
 			selected := m.SelectedEvent()
 
 			if selected == nil {
@@ -153,29 +149,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			event := *selected
 
-			return m, func() tea.Msg { return msgs.OpenEventFormMsg{Event: event, IsNew: false} }
-
-		case "d":
-			selected := m.SelectedEvent()
-
-			if selected == nil {
-				return m, nil
+			switch msg.String() {
+			case "e":
+				return m, func() tea.Msg { return msgs.OpenEventFormMsg{Event: event, IsNew: false} }
+			case "d":
+				return m, func() tea.Msg { return msgs.RequestDeleteMsg{Event: event} }
+			case "y":
+				return m, func() tea.Msg { return msgs.YankMsg{Event: event} }
 			}
 
-			event := *selected
-
-			return m, func() tea.Msg { return msgs.RequestDeleteMsg{Event: event} }
-
-		case "y":
-			selected := m.SelectedEvent()
-
-			if selected == nil {
-				return m, nil
-			}
-
-			event := *selected
-
-			return m, func() tea.Msg { return msgs.YankMsg{Event: event} }
+			return m, nil
 
 		case "p":
 			date := m.FocusedDate()
@@ -187,7 +170,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) selected(events []calendar.Event, index int) (tea.Model, tea.Cmd) {
+func (m Model) withSelectedIndex(index int) (tea.Model, tea.Cmd) {
+	events := m.upcomingEvents()
+
 	if len(events) == 0 {
 		return m, nil
 	}
@@ -235,12 +220,7 @@ func (m Model) View() string {
 
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, m.location)
 
-	type renderedRow struct {
-		text       string
-		eventIndex int
-	}
-
-	var rows []renderedRow
+	var rows []string
 
 	previousDay := time.Time{}
 	selectedRow := 0
@@ -252,7 +232,7 @@ func (m Model) View() string {
 
 		if !day.Equal(previousDay) {
 			if len(rows) > 0 {
-				rows = append(rows, renderedRow{text: "", eventIndex: -1})
+				rows = append(rows, "")
 			}
 
 			header := day.Format("Monday 2 January")
@@ -263,7 +243,7 @@ func (m Model) View() string {
 				header = " " + header + " "
 			}
 
-			rows = append(rows, renderedRow{text: headerStyle.Render(header), eventIndex: -1})
+			rows = append(rows, headerStyle.Render(header))
 			previousDay = day
 		}
 
@@ -282,40 +262,30 @@ func (m Model) View() string {
 			style = lipgloss.NewStyle().Background(lipgloss.Color(event.Color)).Foreground(allDayForeground)
 		}
 
-		text := style.Render(ansi.Truncate("  "+when+"  "+event.Title, m.width-1, "…"))
+		truncated := ansi.Truncate("  "+when+"  "+event.Title, m.width-1, "…")
+
+		text := style.Render(truncated)
 
 		if index == m.selectedEventIndex {
-			text = lipgloss.NewStyle().Reverse(true).Render(ansi.Truncate("  "+when+"  "+event.Title, m.width-1, "…"))
+			text = lipgloss.NewStyle().Reverse(true).Render(truncated)
 			selectedRow = len(rows)
 		}
 
-		rows = append(rows, renderedRow{text: text, eventIndex: index})
+		rows = append(rows, text)
 	}
 
-	scrollOffset := m.scrollOffset
+	scrollOffset := 0
 	if m.selectedEventIndex >= 0 {
 		scrollOffset = max(0, min(selectedRow-m.height/2, len(rows)-m.height))
 	}
-	scrollOffset = max(0, min(scrollOffset, max(0, len(rows)-m.height)))
 
-	var lines []string
-	for _, row := range rows[scrollOffset:min(scrollOffset+m.height, len(rows))] {
-		lines = append(lines, row.text)
-	}
+	lines := rows[scrollOffset:min(scrollOffset+m.height, len(rows))]
 
 	for len(lines) < m.height {
 		lines = append(lines, "")
 	}
 
-	joined := ""
-	for index, line := range lines {
-		if index > 0 {
-			joined += "\n"
-		}
-		joined += line
-	}
-
-	return joined
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) KeyHints() []msgs.KeyHint {

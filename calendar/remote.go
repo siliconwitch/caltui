@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -52,29 +51,26 @@ type remoteAccount struct {
 type Remote struct {
 	location       *time.Location
 	cacheDir       string
-	from, to       time.Time
 	clock          func() time.Time
 	colorOverrides map[string]string
 	stateMutex     sync.RWMutex
 	accounts       []*remoteAccount
 }
 
-func NewRemote(accounts []Account, colorOverrides map[string]string, location *time.Location, now time.Time) (*Remote, error) {
-	cacheDir, err := CacheDir()
+func NewRemote(accounts []Account, colorOverrides map[string]string, location *time.Location) (*Remote, error) {
+	cacheDirectory, err := cacheDir()
 
 	if err != nil {
 		return nil, err
 	}
 
-	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+	if err := os.MkdirAll(cacheDirectory, 0o700); err != nil {
 		return nil, fmt.Errorf("creating cache directory: %w", err)
 	}
 
 	remote := &Remote{
 		location:       location,
-		cacheDir:       cacheDir,
-		from:           now.AddDate(-1, 0, 0),
-		to:             now.AddDate(1, 0, 0),
+		cacheDir:       cacheDirectory,
 		clock:          time.Now,
 		colorOverrides: colorOverrides,
 	}
@@ -97,7 +93,7 @@ func NewRemote(accounts []Account, colorOverrides map[string]string, location *t
 			}
 		}
 
-		if err := account.Validate(); err != nil {
+		if err := account.validate(); err != nil {
 			return nil, err
 		}
 
@@ -110,7 +106,7 @@ func NewRemote(accounts []Account, colorOverrides map[string]string, location *t
 
 		switch account.Type {
 		case "caldav":
-			password, err := account.Secret()
+			password, err := account.secret()
 
 			if err != nil {
 				return nil, err
@@ -125,7 +121,7 @@ func NewRemote(accounts []Account, colorOverrides map[string]string, location *t
 		case "ics":
 			subscriptionURL := account.URL
 			if subscriptionURL == "" {
-				subscriptionURL, err = account.Secret()
+				subscriptionURL, err = account.secret()
 
 				if err != nil {
 					return nil, err
@@ -142,7 +138,15 @@ func NewRemote(accounts []Account, colorOverrides map[string]string, location *t
 		}
 
 		state := &remoteAccount{name: account.Name, client: client}
-		remote.loadCache(state)
+
+		cachedData, err := os.ReadFile(remote.cachePath(account.Name))
+
+		var cached cacheFile
+
+		if err == nil && json.Unmarshal(cachedData, &cached) == nil {
+			state.calendars, state.events = remote.decorate(account.Name, cached.Calendars, cached.Events)
+		}
+
 		remote.accounts = append(remote.accounts, state)
 	}
 
@@ -176,11 +180,9 @@ func (r *Remote) Sync(name string, trigger SyncTrigger) error {
 
 	now := r.clock().In(r.location)
 
-	r.stateMutex.Lock()
-	r.from = now.AddDate(-1, 0, 0)
-	r.to = now.AddDate(1, 0, 0)
-	from, to := r.from, r.to
-	r.stateMutex.Unlock()
+	from := now.AddDate(-1, 0, 0)
+
+	to := now.AddDate(1, 0, 0)
 
 	calendars, events, err := account.client.fetch(from, to)
 
@@ -218,7 +220,24 @@ func (r *Remote) Sync(name string, trigger SyncTrigger) error {
 
 	account.suspectEmpty = false
 
-	cacheErr := r.saveCache(account.name, calendars, events)
+	// persist the cache
+	cachePath := r.cachePath(account.name)
+	temporaryPath := cachePath + ".tmp"
+
+	cacheData, cacheErr := json.Marshal(cacheFile{Calendars: calendars, Events: events})
+
+	if cacheErr == nil {
+		cacheErr = os.WriteFile(temporaryPath, cacheData, 0o600)
+	}
+
+	if cacheErr == nil {
+		cacheErr = os.Rename(temporaryPath, cachePath)
+	}
+
+	if cacheErr != nil {
+		cacheErr = fmt.Errorf("caching events: %w", cacheErr)
+	}
+
 	account.opMutex.Unlock()
 
 	calendars, events = r.decorate(account.name, calendars, events)
@@ -244,14 +263,7 @@ func (r *Remote) Events(from, to time.Time) []Event {
 		}
 	}
 
-	sort.Slice(events, func(i, j int) bool {
-		if events[i].Start.Equal(events[j].Start) {
-			return events[i].Title < events[j].Title
-		}
-		return events[i].Start.Before(events[j].Start)
-	})
-
-	return events
+	return sortedByStart(events)
 }
 
 func (r *Remote) Calendars() []Calendar {
@@ -494,7 +506,10 @@ func (r *Remote) decorate(accountName string, calendars []Calendar, events []Eve
 			calendars[index].Color = override
 
 		case calendars[index].Color == "":
-			calendars[index].Color = paletteColor(accountName + "/" + calendars[index].Name)
+			hash := fnv.New32a()
+			hash.Write([]byte(accountName + "/" + calendars[index].Name))
+
+			calendars[index].Color = palette[hash.Sum32()%uint32(len(palette))]
 		}
 
 		colors[calendars[index].Name] = calendars[index].Color
@@ -513,13 +528,6 @@ func (r *Remote) decorate(accountName string, calendars []Calendar, events []Eve
 	return calendars, events
 }
 
-func paletteColor(key string) string {
-	hash := fnv.New32a()
-	hash.Write([]byte(key))
-
-	return palette[hash.Sum32()%uint32(len(palette))]
-}
-
 type cacheFile struct {
 	Calendars []Calendar
 	Events    []Event
@@ -527,41 +535,4 @@ type cacheFile struct {
 
 func (r *Remote) cachePath(accountName string) string {
 	return filepath.Join(r.cacheDir, accountName+".json")
-}
-
-func (r *Remote) loadCache(account *remoteAccount) {
-	data, err := os.ReadFile(r.cachePath(account.name))
-
-	if err != nil {
-		return
-	}
-
-	var cached cacheFile
-
-	if err := json.Unmarshal(data, &cached); err != nil {
-		return
-	}
-
-	account.calendars, account.events = r.decorate(account.name, cached.Calendars, cached.Events)
-}
-
-func (r *Remote) saveCache(accountName string, calendars []Calendar, events []Event) error {
-	data, err := json.Marshal(cacheFile{Calendars: calendars, Events: events})
-
-	if err != nil {
-		return fmt.Errorf("caching events: %w", err)
-	}
-
-	path := r.cachePath(accountName)
-	temporary := path + ".tmp"
-
-	if err := os.WriteFile(temporary, data, 0o600); err != nil {
-		return fmt.Errorf("caching events: %w", err)
-	}
-
-	if err := os.Rename(temporary, path); err != nil {
-		return fmt.Errorf("caching events: %w", err)
-	}
-
-	return nil
 }
